@@ -1,0 +1,75 @@
+// Symbol weights for weighted RNG (higher = more common)
+const SYMBOL_WEIGHTS: number[] = [
+  30, // 0
+  28, // 1
+  26, // 2
+  24, // 3
+  20, // 4
+  18, // 5
+  10, // 6 (high value)
+  8, // 7 (high value)
+  5, // 8 (wild - rare)
+  3, // 9 (scatter - very rare)
+];
+
+SYMBOL WEIGHTS - probability of disappearing
+
+// Paytable example: paytableArr[symbolId][count] => payout multiplier (per bet)
+// Index 0..TOTAL_SYMBOLS-1; inner array index = count (0..REELS_COUNT). Use 0..5 for counts.
+const paytableArr: number[][] = [
+  /* 0 */ [0, 0, 4, 16, 80, 300], // regular
+  /* 1 */ [0, 0, 4, 14, 70, 260],
+  /* 2 */ [0, 0, 3, 12, 60, 240],
+  /* 3 */ [0, 0, 3, 10, 50, 200],
+  /* 4 */ [0, 0, 2, 8, 40, 160],
+  /* 5 */ [0, 0, 2, 6, 30, 120],
+  /* 6 */ [0, 0, 6, 30, 120, 500], // high value
+  /* 7 */ [0, 0, 8, 40, 160, 600], // high value
+  /* 8 */ [0, 0, 0, 0, 0, 0], // wild (payouts usually don't exist for wild-by-itself here)
+  /* 9 */ [0, 0, 0, 2, 10, 50], // scatter (we'll treat scatter separately too)
+];
+
+paytableArr - controls how much they pay
+
+
+
+
+scatter - free spin
+wild - 
+
+Functionality that needs to fix
+-Free spin for 3 scatter symbol
+-Wild symbol
+-Real slot machines never have both winnings. Paylines or ways.
+-
+
+
+
+
+
+
+
+
+
+
+Is this possible?
+
+Ways
+Reel 1:  A A
+Reel 2:  A
+Reel 3:  A A
+payout
+
+and
+
+Scatter
+Reel 1: B
+Reel 3: B
+Reel 5: B
+
+and
+
+Scatter (free spin)
+Reel 1: C
+Reel 2: C
+Reel 3: C
