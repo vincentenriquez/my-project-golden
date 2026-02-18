@@ -73,3 +73,9 @@ Scatter (free spin)
 Reel 1: C
 Reel 2: C
 Reel 3: C
+
+
+Tom task
+-Double check the ways and wild
+-Adjancency rule
+-Highlight the 

@@ -24,11 +24,11 @@ import {
  */
 
 // ---------- Constants ----------
-const REEL_WIDTH = 160;
-const SYMBOL_SIZE = 100;
+const REEL_WIDTH = 130;
+const SYMBOL_SIZE = 90;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
-const REEL_STRIP_LENGTH = 14; // can be tuned (10-20 typical)
+const REEL_STRIP_LENGTH = 15; // can be tuned (10-20 typical)
 const BG_IMAGE =
   "bgg1.jpg";
 
@@ -67,6 +67,12 @@ const SYMBOL_WEIGHTS: number[] = [
 
 let freeSpinsRemaining = 0;
 let inFreeSpins = false;
+let overlayBG: Graphics;
+
+// ---------- AUTO SPIN STATE ----------
+let autoSpinActive = false;
+let autoSpinsRemaining = 0;
+const AUTO_SPIN_COUNT = 10;
 
 // ---------- PIXI App ----------
 const app = new Application();
@@ -75,7 +81,7 @@ await app.init({
   resizeTo: window,
 });
 
-document.body.appendChild(app.view);
+document.body.appendChild(app.canvas);
 
 // --------- Layer containers ---------
 const backgroundLayer = new Container();
@@ -84,6 +90,7 @@ const reelsLayer = new Container();
 const frameLayer = new Container();
 const highlightLayer = new Container();
 const uiLayer = new Container();
+const overlayLayer =  new Container(); // for popups, big win effects, etc.
 
 app.stage.addChild(backgroundLayer);
 app.stage.addChild(machineLayer);
@@ -91,6 +98,16 @@ app.stage.addChild(reelsLayer);
 app.stage.addChild(frameLayer);
 app.stage.addChild(highlightLayer);
 app.stage.addChild(uiLayer);
+app.stage.addChild(overlayLayer);
+
+app.stage.sortableChildren = true;
+backgroundLayer.zIndex = 0;
+machineLayer.zIndex = 5;
+reelsLayer.zIndex = 10;
+frameLayer.zIndex = 20;
+highlightLayer.zIndex = 30;
+uiLayer.zIndex = 40;
+overlayLayer.zIndex = 50;
 
 // ---------- Interfaces ----------
 interface Reel {
@@ -133,6 +150,9 @@ let bet = 10;
 let resultText: Text;
 let creditsText: Text;
 let betText: Text;
+let totalSpinText: Text;
+let autoSpinButton: Graphics;
+let stopAutoSpinButton: Graphics;
 let lastSpinResult: number[][] | null = null;
 let reelContainer: Container;
 let mask: Graphics;
@@ -207,7 +227,7 @@ function buildSlotMachine() {
   mask.drawRoundedRect(0, 0, frameWidth, frameHeight, 14);
   mask.endFill();
   mask.x = Math.round((app.screen.width - frameWidth) / 2);
-  const topMargin = Math.round((app.screen.height - frameHeight) / 2);
+  const topMargin = Math.round((app.screen.height - frameHeight) / 2.5);
   mask.y = topMargin;
   app.stage.addChild(mask);
   reelContainer.mask = mask;
@@ -221,7 +241,7 @@ function buildSlotMachine() {
   // ---------- SLOT FRAME ---------
   const frame = new Graphics();
 
-  const padding = 20;
+  const padding = 10;
 
   frame.lineStyle(8, 0xd4af37);
   frame.beginFill(0x1a1a1a, 0);
@@ -287,29 +307,175 @@ function buildSlotMachine() {
 
   // UI: credits and result
   const style = new TextStyle({
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: "bold",
     fill: 0xffffff,
   });
 
-  creditsText = new Text(`Credits: ${credits}`, style);
+  creditsText = new Text(`Balance: ${credits}`, style);
   creditsText.anchor.set(1, 0.5); // Right-align
-  creditsText.x = app.screen.width / 2 - 100;
+  creditsText.x = app.screen.width / 2 - 150;
   creditsText.y = mask.y + frameHeight + 50;
   uiLayer.addChild(creditsText);
 
-  resultText = new Text("", style);
-  resultText.anchor.set(0, 0.5); // Left-align
-  resultText.x = app.screen.width / 2 + 100;
-  resultText.y = mask.y + frameHeight + 50;
-  uiLayer.addChild(resultText);
+resultText = new Text("", new TextStyle({
+  fontSize: 48,
+  fontWeight: "bold",
+  fill: 0xffd700,
+  stroke: 0x000000,
+  fontFamily: "Arial",
+}));
 
-  // Bet text (centered below spin button)
+resultText.anchor.set(0.5);
+
+// center on slot machine
+resultText.x = app.screen.width / 2;
+resultText.y = mask.y + frameHeight / 2;
+
+overlayLayer.addChild(resultText);
+
+  // BET CONTAINER (holds bet text and +/- buttons, centered below spin button)
+  const betContainer = new Container();
+  uiLayer.addChild(betContainer);
+  // Position bet container centered below spin button
+  betContainer.x = app.screen.width / 2;
+  betContainer.y = mask.y + frameHeight + 50;
+
+  // MINUS BUTTON
+  const minusButton = new Graphics();
+
+  minusButton.beginFill(0xd4af37);
+  minusButton.drawRoundedRect(0, 0, 40, 40, 100);
+  minusButton.endFill();
+  
+  // minusButton.pivot.set(25, 25);
+  // minusButton.x = -80;
+  // minusButton.cursor = "pointer";
+  // betContainer.addChild(minusButton);
+  minusButton.eventMode = "static";
+  minusButton.cursor = "pointer";
+
+  const minusText = new Text("-", new TextStyle({
+    fontSize: 18,
+    fontWeight: "bold",
+    fill: 0x1a1a1a,
+  }));
+  minusText.anchor.set(0.5);
+  minusText.x = 20;
+  minusText.y = 20;
+  minusButton.addChild(minusText);
+  betContainer.addChild(minusButton);
+
   betText = new Text(`Bet: ${bet}`, style);
   betText.anchor.set(0.5);
-  betText.x = app.screen.width / 2;
-  betText.y = mask.y + frameHeight + 50;
-  uiLayer.addChild(betText);
+  betContainer.addChild(betText);
+
+  // PLUS BUTTON
+  const plusButton = new Graphics();
+
+  plusButton.beginFill(0xd4af37);
+  plusButton.drawRoundedRect(0, 0, 40, 40, 100);
+  plusButton.endFill();
+
+  plusButton.eventMode = "static";
+  plusButton.cursor = "pointer";
+
+  const plusText = new Text("+", new TextStyle({
+    fontSize: 18,
+    fontWeight: "bold",
+    fill: 0x1a1a1a,
+  }));
+  plusText.anchor.set(0.5);
+  plusText.x = 20;
+  plusText.y = 20;
+  plusButton.addChild(plusText);
+  betContainer.addChild(plusButton);
+
+  // ---------- QUICK BET BUTTONS ----------
+const quickBets = [10, 50, 100];
+const quickBetButtons: Graphics[] = [];
+
+quickBets.forEach((amount, idx) => {
+  const btn = new Graphics();
+  btn.beginFill(0xd4af37);
+  btn.drawRoundedRect(0, 0, 60, 50, 10);
+  btn.endFill();
+  btn.eventMode = "static";
+  btn.cursor = "pointer";
+
+  const label = new Text(`${amount}`, {
+    fontSize: 22,
+    fontWeight: "bold",
+    fill: 0x1a1a1a,
+  });
+  label.anchor.set(0.5);
+  label.x = 30;
+  label.y = 25;
+  btn.addChild(label);
+
+  // Position horizontally after plusButton with spacing
+  btn.x = plusButton.x + 0 + idx * 70; // adjust spacing
+  btn.y = 120;
+  betContainer.addChild(btn);
+
+  btn.addEventListener("pointerdown", () => {
+    if (running) return;
+    bet = amount;
+    betText.text = `Bet: ${bet}`;
+    // reposition +/- buttons relative to new betText width
+    minusButton.x = -betText.width / 2 - minusButton.width - spacing;
+    plusButton.x = betText.width / 2 + spacing;
+  });
+
+  quickBetButtons.push(btn);
+});
+
+
+  const spacing = 20;
+
+  minusButton.x = -betText.width / 2 - minusButton.width - spacing; // position to the left of bet text
+  minusButton.y = -minusButton.height / 2; // center vertically
+
+  // Event listeners for buttons
+  betText.x = 0;
+  betText.y = 0;
+
+  plusButton.x = betText.width / 2 + spacing;
+  plusButton.y = -plusButton.height / 2;
+
+  // ---------- REMAINING SPINS TEXT (beside bet) ----------
+  totalSpinText = new Text("Spins: 0", style);
+  totalSpinText.anchor.set(0, 0.5);
+  totalSpinText.x = plusButton.x + plusButton.width + 30;
+  totalSpinText.y = 0;
+  betContainer.addChild(totalSpinText);
+
+  minusButton.addEventListener("pointerdown", () => {
+    if (running) return;
+    if (bet > MIN_BET) {
+      bet--;
+      betText.text = `Bet: ${bet}`;
+      minusButton.x = -betText.width / 2 - minusButton.width - spacing; // adjust position based on new text width
+      plusButton.x = betText.width / 2 + spacing;
+    }
+  });
+
+  plusButton.addEventListener("pointerdown", () => {
+    if (running) return;
+    if (bet < MAX_BET) {
+      bet++;
+      betText.text = `Bet: ${bet}`;
+      minusButton.x = -betText.width / 2 - minusButton.width - spacing; // adjust position based on new text width
+      plusButton.x = betText.width / 2 + spacing;
+    }
+  });
+
+  // Bet text (centered below spin button)
+  // betText = new Text(`Bet: ${bet}`, style);
+  // betText.anchor.set(0.5);
+  // betText.x = app.screen.width / 2;
+  // betText.y = mask.y + frameHeight + 50;
+  // uiLayer.addChild(betText);
 
   // ---------- Spin button using spinner button image ----------
   console.log("Creating spin button with texture:", spinTexture);
@@ -318,7 +484,7 @@ function buildSlotMachine() {
 
   spinButton.anchor.set(0.5);
   spinButton.x = app.screen.width / 2;
-  spinButton.y = mask.y + frameHeight + 150;
+  spinButton.y = mask.y + frameHeight + 130;
   spinButton.width = 100;
   spinButton.height = 100;
   spinButton.eventMode = "static";
@@ -343,7 +509,7 @@ function buildSlotMachine() {
   uiLayer.addChild(spinButton);
 
   spinButton.addEventListener("pointerdown", () => {
-    if (running) return;
+    if (running || autoSpinActive) return;
 
     if (!inFreeSpins) {
       if (credits < bet) {
@@ -352,7 +518,7 @@ function buildSlotMachine() {
       }
 
       credits -= bet;
-      creditsText.text = `Credits: ${credits}`;
+      creditsText.text = `Balance: ${credits}`;
     }
 
     tweenTo(
@@ -367,81 +533,51 @@ function buildSlotMachine() {
     spinToResult(result);
   });
 
-  // ---------- Minus Button (decrease bet) ----------
-  const minusButton = new Graphics();
-  minusButton.beginFill(0xd4af37);
-  minusButton.drawRoundedRect(0, 0, 60, 60, 10);
-  minusButton.endFill();
-  minusButton.x = spinButton.x - 130;
-  minusButton.y = spinButton.y - 30;
-  minusButton.eventMode = "static";
-  minusButton.cursor = "pointer";
+  // ---------- AUTO SPIN BUTTON ----------
+  autoSpinButton = new Graphics();
+  autoSpinButton.beginFill(0x2255cc);
+  autoSpinButton.drawRoundedRect(0, 0, 130, 50, 14);
+  autoSpinButton.endFill();
+  autoSpinButton.eventMode = "static";
+  autoSpinButton.cursor = "pointer";
 
-  const minusText = new Text("-", new TextStyle({
-    fontSize: 48,
-    fontWeight: "bold",
-    fill: 0x000000,
-  }));
-  minusText.anchor.set(0.5);
-  minusText.x = 30;
-  minusText.y = 30;
-  minusButton.addChild(minusText);
+  const autoSpinLabel = new Text("AUTO SPIN", new TextStyle({ fontSize: 16, fontWeight: "bold", fill: 0xffffff }));
+  autoSpinLabel.anchor.set(0.5);
+  autoSpinLabel.x = 65;
+  autoSpinLabel.y = 25;
+  autoSpinButton.addChild(autoSpinLabel);
 
-  minusButton.addEventListener("pointerdown", () => {
-    if (running) return;
-    if (bet > MIN_BET) {
-      bet = Math.max(MIN_BET, bet - 1);
-      betText.text = `Bet: ${bet}`;
-    }
+  autoSpinButton.x = spinButton.x + 70;
+  autoSpinButton.y = spinButton.y - 25;
+  uiLayer.addChild(autoSpinButton);
+
+  autoSpinButton.addEventListener("pointerdown", () => {
+    if (running || autoSpinActive || inFreeSpins) return;
+    startAutoSpin(AUTO_SPIN_COUNT, spinButton);
   });
 
-  minusButton.addEventListener("pointerover", () => {
-    minusButton.alpha = 0.8;
+  // ---------- STOP AUTO SPIN BUTTON ----------
+  stopAutoSpinButton = new Graphics();
+  stopAutoSpinButton.beginFill(0xcc2222);
+  stopAutoSpinButton.drawRoundedRect(0, 0, 130, 50, 14);
+  stopAutoSpinButton.endFill();
+  stopAutoSpinButton.eventMode = "static";
+  stopAutoSpinButton.cursor = "pointer";
+  stopAutoSpinButton.visible = false;
+
+  const stopLabel = new Text("STOP AUTO", new TextStyle({ fontSize: 15, fontWeight: "bold", fill: 0xffffff }));
+  stopLabel.anchor.set(0.5);
+  stopLabel.x = 65;
+  stopLabel.y = 25;
+  stopAutoSpinButton.addChild(stopLabel);
+
+  stopAutoSpinButton.x = autoSpinButton.x;
+  stopAutoSpinButton.y = autoSpinButton.y;
+  uiLayer.addChild(stopAutoSpinButton);
+
+  stopAutoSpinButton.addEventListener("pointerdown", () => {
+    cancelAutoSpin();
   });
-
-  minusButton.addEventListener("pointerout", () => {
-    minusButton.alpha = 1;
-  });
-
-  uiLayer.addChild(minusButton);
-
-  // ---------- Plus Button (increase bet) ----------
-  const plusButton = new Graphics();
-  plusButton.beginFill(0xd4af37);
-  plusButton.drawRoundedRect(0, 0, 60, 60, 10);
-  plusButton.endFill();
-  plusButton.x = spinButton.x + 70;
-  plusButton.y = spinButton.y - 30;
-  plusButton.eventMode = "static";
-  plusButton.cursor = "pointer";
-
-  const plusText = new Text("+", new TextStyle({
-    fontSize: 48,
-    fontWeight: "bold",
-    fill: 0x000000,
-  }));
-  plusText.anchor.set(0.5);
-  plusText.x = 30;
-  plusText.y = 30;
-  plusButton.addChild(plusText);
-
-  plusButton.addEventListener("pointerdown", () => {
-    if (running) return;
-    if (bet < MAX_BET) {
-      bet = Math.min(MAX_BET, bet + 1);
-      betText.text = `Bet: ${bet}`;
-    }
-  });
-
-  plusButton.addEventListener("pointerover", () => {
-    plusButton.alpha = 0.8;
-  });
-
-  plusButton.addEventListener("pointerout", () => {
-    plusButton.alpha = 1;
-  });
-
-  uiLayer.addChild(plusButton);
 
   // initial render of sprites based on their initial positions
   updateReelSprites();
@@ -470,6 +606,65 @@ function buildSlotMachine() {
   });
 
   console.log("Slot machine built.");
+}
+
+// ---------- AUTO SPIN FUNCTIONS ----------
+function startAutoSpin(count: number, spinButton: Sprite) {
+  autoSpinActive = true;
+  autoSpinsRemaining = count;
+
+  autoSpinButton.visible = false;
+  stopAutoSpinButton.visible = true;
+  updateAutoSpinCountDisplay();
+
+  runNextAutoSpin(spinButton);
+}
+
+function runNextAutoSpin(spinButton: Sprite) {
+  if (!autoSpinActive || autoSpinsRemaining <= 0) {
+    endAutoSpin();
+    return;
+  }
+
+  if (credits < bet) {
+    resultText.text = "Not enough credits!";
+    endAutoSpin();
+    return;
+  }
+
+  if (!inFreeSpins) {
+    credits -= bet;
+    creditsText.text = `Balance: ${credits}`;
+  }
+
+  tweenTo(
+    spinButton,
+    "rotation",
+    spinButton.rotation + Math.PI * 2,
+    700,
+    (t: number) => t
+  );
+
+  const result = generateResult({ weighted: true });
+  spinToResult(result);
+}
+
+function cancelAutoSpin() {
+  autoSpinActive = false;
+  autoSpinsRemaining = 0;
+  endAutoSpin();
+}
+
+function endAutoSpin() {
+  autoSpinActive = false;
+  autoSpinsRemaining = 0;
+  autoSpinButton.visible = true;
+  stopAutoSpinButton.visible = false;
+  totalSpinText.text = "Spins: 0";
+}
+
+function updateAutoSpinCountDisplay() {
+  totalSpinText.text = `Spins: ${autoSpinsRemaining}`;
 }
 
 // ---------- Helper: update sprite textures/positions based on reel.position ----------
@@ -732,47 +927,66 @@ interface WaysResult {
   combos: number; // number of ways combinations
   payout: number;
 }
+// ---------- Evaluate Ways (FIXED: scatter excluded) ----------
+// ---------- Evaluate Ways (FINAL FIXED VERSION) ----------
+// ---------- Evaluate Ways (FINAL FIXED VERSION) ----------
 function evaluateWays(matrix: number[][], betAmount: number): WaysResult[] {
   const results: WaysResult[] = [];
-  const symbolCount = slotTextures.length;
 
-  for (let symbol = 0; symbol < symbolCount; symbol++) {
-    // counts per reel
-    const countsPerReel: number[] = [];
-    for (let r = 0; r < REELS_COUNT; r++) {
-      let count = 0;
+  for (let symbol = 0; symbol < TOTAL_SYMBOLS; symbol++) {
+
+    // ❌ Skip scatter & wild as base symbols
+    if (symbol === SCATTER_SYMBOL_ID) continue;
+    if (symbol === WILD_SYMBOL_ID) continue;
+
+    let consecutiveReels = 0;
+    let combos = 1;
+
+    // 🔥 STRICT LEFT-TO-RIGHT ADJACENCY
+    for (let reel = 0; reel < REELS_COUNT; reel++) {
+
+      let matchesOnThisReel = 0;
+
       for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
-        // wilds count as matching for ways
-        if (matrix[row][r] === symbol || matrix[row][r] === WILD_SYMBOL_ID) count++;
+        const cell = matrix[row][reel];
+
+        if (cell === symbol || cell === WILD_SYMBOL_ID) {
+          matchesOnThisReel++;
+        }
       }
-      countsPerReel.push(count);
+
+      // 🚨 If reel has no match → chain breaks immediately
+      if (matchesOnThisReel === 0) {
+        break;
+      }
+
+      consecutiveReels++;
+      combos *= matchesOnThisReel;
     }
 
-    // combos for 3..REELS_COUNT (multiply counts across first N reels)
-    for (let n = 3; n <= REELS_COUNT; n++) {
-      // product of countsPerReel[0..n-1]
-      let product = 1;
-      for (let idx = 0; idx < n; idx++) {
-        product *= countsPerReel[idx];
-      }
-      if (product > 0) {
-        // payout multiplier lookup (using n as count)
-        const payoutMultiplier = (paytableArr[symbol] && paytableArr[symbol][n]) || 0;
-        const payout = product * payoutMultiplier * betAmount;
-        if (payout > 0) {
-          results.push({
-            symbol,
-            hits: n,
-            combos: product,
-            payout,
-          });
-        }
+    // 🎯 Industry standard minimum = 3 reels
+    if (consecutiveReels >= 3) {
+
+      const payoutMultiplier =
+        (paytableArr[symbol] &&
+          paytableArr[symbol][consecutiveReels]) || 0;
+
+      const payout = combos * payoutMultiplier * betAmount;
+
+      if (payout > 0) {
+        results.push({
+          symbol,
+          hits: consecutiveReels,
+          combos,
+          payout,
+        });
       }
     }
   }
 
   return results;
 }
+
 
 // ---------- Evaluate Scatters ----------
 interface ScatterResult {
@@ -796,6 +1010,45 @@ function evaluateScatters(matrix: number[][], betAmount: number): ScatterResult 
   return null;
 }
 
+// ---------- Expanding Wilds ----------
+function applyExpandingWilds(matrix: number[][]): number[][] {
+
+  // clone matrix (important)
+  const expanded = matrix.map(row => [...row]);
+
+  for (let reel = 0; reel < REELS_COUNT; reel++) {
+
+    let hasWild = false;
+
+    // check if reel contains wild
+    for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
+
+      if (matrix[row][reel] === WILD_SYMBOL_ID) {
+
+        hasWild = true;
+        break;
+
+      }
+
+    }
+
+    // expand entire reel
+    if (hasWild) {
+
+      for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
+
+        expanded[row][reel] = WILD_SYMBOL_ID;
+
+      }
+
+    }
+
+  }
+
+  return expanded;
+
+}
+
 // ---------- Clear Highlights ----------
 function clearHighlights() {
   // Remove all highlight boxes
@@ -810,7 +1063,15 @@ function clearHighlights() {
 function evaluateAndShowResults(matrix: number[][]) {
   console.log("Visible matrix (row-major):", matrix);
 
-  const waysResults = evaluateWays(matrix, bet);
+  // matrix = applyExpandingWilds(matrix);
+  // const waysResults = evaluateWays(matrix, bet);
+  // console.log("Expanded matrix: ", matrix);
+
+  const originalMatrix = matrix;
+  const waysResults = evaluateWays(originalMatrix, bet);
+
+  matrix = applyExpandingWilds(matrix);
+
   const scatterResult = evaluateScatters(matrix, bet);
 
   let totalPayout = 0;
@@ -818,21 +1079,69 @@ function evaluateAndShowResults(matrix: number[][]) {
   // Clear previous highlights
   clearHighlights();
 
-  // ----- WAYS -----
-  waysResults.forEach((res) => {
-    totalPayout += res.payout;
+  // Highlight expanding wild reels
+for (let reel = 0; reel < REELS_COUNT; reel++) {
 
-    for (let r = 0; r < res.hits; r++) {
+  let hasWild = false;
+
+  for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
+
+    if (matrix[row][reel] === WILD_SYMBOL_ID) {
+
+      hasWild = true;
+      break;
+
+    }
+
+  }
+
+  if (hasWild) {
+
+    for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
+
+      highlightSpriteAt(reel, row, 0x00ffff); // cyan highlight
+
+    }
+
+  }
+
+}
+
+  // ----- WAYS -----
+  if (waysResults.length > 0) {
+    const bestWin = waysResults.reduce((max, curr) =>
+      curr.payout > max.payout ? curr : max
+    );
+
+    totalPayout += bestWin.payout;
+
+    // highlight only best win
+    for (let r = 0; r < bestWin.hits; r++) {
       for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
         if (
-          matrix[row][r] === res.symbol ||
+          matrix[row][r] === bestWin.symbol ||
           matrix[row][r] === WILD_SYMBOL_ID
         ) {
-          highlightSpriteAt(r, row, 0xffd700); // Gold color for regular wins
+          highlightSpriteAt(r, row, 0xffd700);
         }
       }
     }
-  });
+  }
+
+  // waysResults.forEach((res) => {
+  //   totalPayout += res.payout;
+
+  //   for (let r = 0; r < res.hits; r++) {
+  //     for (let row = 0; row < SYMBOLS_PER_REEL; row++) {
+  //       if (
+  //         matrix[row][r] === res.symbol ||
+  //         matrix[row][r] === WILD_SYMBOL_ID
+  //       ) {
+  //         highlightSpriteAt(r, row, 0xffd700); // Gold color for regular wins
+  //       }
+  //     }
+  //   }
+  // });
 
   // ----- SCATTER -----
   if (scatterResult) {
@@ -849,6 +1158,14 @@ function evaluateAndShowResults(matrix: number[][]) {
     // 🎁 FREE SPINS TRIGGER
     const spinsWon = FREE_SPINS_AWARDED[scatterResult.count] || 0;
     if (spinsWon > 0) {
+      // ⛔ Pause auto spin — free spins take over
+      if (autoSpinActive) {
+        autoSpinActive = false;
+        autoSpinButton.visible = false;
+        stopAutoSpinButton.visible = false;
+        totalSpinText.text = "Spins: 0";
+      }
+
       freeSpinsRemaining += spinsWon;
       inFreeSpins = true;
       resultText.text = `BONUS! ${spinsWon} Free Spins!`;
@@ -860,14 +1177,14 @@ function evaluateAndShowResults(matrix: number[][]) {
     credits += totalPayout;
   }
 
-  if (!inFreeSpins) {
-    resultText.text =
-      totalPayout > 0
-        ? `WIN: ${totalPayout} credits!`
-        : "No win. Try again!";
-  }
+  // if (!inFreeSpins) {
+  //   resultText.text =
+  //     totalPayout > 0
+  //       ? `WIN: ${totalPayout}`
+  //       : "No win. Try again!";
+  // }
 
-  creditsText.text = `Credits: ${credits}`;
+  creditsText.text = `Balance: ${credits}`;
 
   console.log("Ways results:", waysResults);
   console.log("Scatter result:", scatterResult);
@@ -884,7 +1201,34 @@ function evaluateAndShowResults(matrix: number[][]) {
     } else {
       inFreeSpins = false;
       resultText.text = "Bonus finished!";
+
+      // After free spins end, stop auto spin fully
+      if (autoSpinsRemaining > 0) {
+        endAutoSpin();
+        resultText.text = "Bonus finished! Auto spin stopped.";
+      }
     }
+    return;
+  }
+
+  // ----- CONTINUE AUTO SPIN -----
+  if (autoSpinActive) {
+    autoSpinsRemaining--;
+    updateAutoSpinCountDisplay();
+
+    if (autoSpinsRemaining <= 0) {
+      endAutoSpin();
+      return;
+    }
+
+    // Find spin button reference to pass rotation tween
+    const spinBtn = uiLayer.children.find(
+      (c) => c instanceof Sprite && (c as Sprite).texture === spinTexture
+    ) as Sprite | undefined;
+
+    setTimeout(() => {
+      if (autoSpinActive) runNextAutoSpin(spinBtn!);
+    }, 1200);
   }
 }
 
