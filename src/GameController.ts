@@ -1,3 +1,5 @@
+//GameController.ts
+
 import { Container, Graphics, Text } from "pixi.js";
 import type { Reel } from "./Reel";
 import {
