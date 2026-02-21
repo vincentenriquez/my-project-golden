@@ -1,3 +1,5 @@
+// symbols.ts
+
 /**
  * Symbol configuration and paytable logic.
  * Encapsulates: symbol IDs, weights, paytables, and weighted RNG.

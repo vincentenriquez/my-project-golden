@@ -1,3 +1,5 @@
+//main.ts
+
 import {
   Application,
   Assets,
@@ -18,8 +20,8 @@ import { GameController } from "./GameController";
  */
 
 // ---------- Layout constants ----------
-const REEL_WIDTH = 130;
-const SYMBOL_SIZE = 90;
+const REEL_WIDTH = 132;
+const SYMBOL_SIZE = 80;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
 const REEL_STRIP_LENGTH = 15;
@@ -33,9 +35,45 @@ const app = new Application();
 
 await app.init({
   resizeTo: window,
+  backgroundAlpha: 0,
 });
 
 document.body.appendChild(app.canvas);
+
+// Frame
+const gameContainer = new Container();
+app.stage.addChild(gameContainer);
+
+const frameTexture = await Assets.load("/Frame_1.png"); // load frame texture (used for both visual and mask)
+const frameSprite = new Sprite(frameTexture);
+frameSprite.anchor.set(0.5);
+
+gameContainer.addChild(frameSprite);
+
+function resizeFrame() {
+  const screenW = app.screen.width;
+  const screenH = app.screen.height;
+
+  const frameW = frameSprite.texture.width;
+  const frameH = frameSprite.texture.height;
+
+  // Scale to fit inside screen (like CSS contain)
+  const scale = Math.min(
+    screenW / frameW,
+    screenH / frameH
+  );
+
+  gameContainer.scale.set(scale);
+
+  gameContainer.zIndex = 10; // Ensure frame is above background but below reels
+
+  // Center container
+  gameContainer.x = screenW / 2;
+  gameContainer.y = screenH / 2;
+}
+
+resizeFrame();
+app.renderer.on("resize", resizeFrame);
 
 // --------- Layer containers ---------
 const backgroundLayer = new Container();
@@ -47,12 +85,12 @@ const uiLayer = new Container();
 const overlayLayer =  new Container(); // for popups, big win effects, etc.
 
 app.stage.addChild(backgroundLayer);
-app.stage.addChild(machineLayer);
-app.stage.addChild(reelsLayer);
-app.stage.addChild(frameLayer);
-app.stage.addChild(highlightLayer);
-app.stage.addChild(uiLayer);
-app.stage.addChild(overlayLayer);
+gameContainer.addChild(machineLayer);
+gameContainer.addChild(reelsLayer);
+gameContainer.addChild(frameLayer);
+gameContainer.addChild(highlightLayer);
+gameContainer.addChild(uiLayer);
+gameContainer.addChild(overlayLayer);
 
 app.stage.sortableChildren = true;
 backgroundLayer.zIndex = 0;
@@ -124,8 +162,24 @@ onAssetsLoaded();
 function buildSlotMachine() {
   // Background
   const bg = new Sprite(Texture.from(BG_IMAGE));
-  bg.width = app.screen.width;
-  bg.height = app.screen.height;
+  
+  function resizeBackground() {
+    const scaleX = app.screen.width / bg.texture.width;
+    const scaleY = app.screen.height / bg.texture.height;
+
+    // cover whole screen (like CSS background-size: cover)
+    const scale = Math.max(scaleX, scaleY);
+
+    bg.scale.set(scale);
+
+    bg.x = 0; // left-align
+    bg.y = 0; // top-align
+
+    bg.zIndex = 0;
+  }
+  resizeBackground();
+  app.renderer.on("resize", resizeBackground);
+
   backgroundLayer.addChild(bg);
 
   // Reel container
@@ -136,13 +190,12 @@ function buildSlotMachine() {
   const frameWidth = REEL_WIDTH * REELS_COUNT;
   const frameHeight = SYMBOL_SIZE * SYMBOLS_PER_REEL;
   mask = new Graphics();
-  mask.beginFill(0xffffff);
+  // mask.beginFill(0xffffff);
   mask.drawRoundedRect(0, 0, frameWidth, frameHeight, 14);
   mask.endFill();
-  mask.x = Math.round((app.screen.width - frameWidth) / 2);
-  const topMargin = Math.round((app.screen.height - frameHeight) / 2.5);
-  mask.y = topMargin;
-  app.stage.addChild(mask);
+  mask.x = -frameWidth / 2;
+  mask.y = -frameHeight / 1;
+  gameContainer.addChild(mask);
   reelContainer.mask = mask;
   reelContainer.x = mask.x;
   reelContainer.y = mask.y;
@@ -156,7 +209,7 @@ function buildSlotMachine() {
 
   const padding = 10;
 
-  frame.lineStyle(8, 0xd4af37);
+  // frame.lineStyle(8, 0xd4af37);
   frame.beginFill(0x1a1a1a, 0);
   frame.drawRoundedRect(
     mask.x - padding,
@@ -206,7 +259,7 @@ function buildSlotMachine() {
   creditsText.anchor.set(1, 0.5); // Right-align
   creditsText.x = app.screen.width / 2 - 150;
   creditsText.y = mask.y + frameHeight + 50;
-  uiLayer.addChild(creditsText);
+  gameContainer.addChild(creditsText);
 
   const resultText = new Text("", new TextStyle({
   fontSize: 48,
@@ -246,12 +299,12 @@ overlayLayer.addChild(resultText);
   minusButton.cursor = "pointer";
 
   const minusText = new Text("-", new TextStyle({
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "bold",
     fill: 0x1a1a1a,
   }));
   minusText.anchor.set(0.5);
-  minusText.x = 20;
+  minusText.x = 200;
   minusText.y = 20;
   minusButton.addChild(minusText);
   betContainer.addChild(minusButton);
