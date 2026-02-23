@@ -1,5 +1,4 @@
 // Reel.ts
-
 import { Container, Sprite, Texture, BlurFilter } from "pixi.js";
 
 export interface ReelConfig {

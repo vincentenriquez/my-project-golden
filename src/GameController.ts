@@ -1,6 +1,5 @@
 //GameController.ts
-
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Text, Sprite } from "pixi.js";
 import type { Reel } from "./Reel";
 import {
   TOTAL_SYMBOLS,
@@ -63,8 +62,8 @@ export interface GameControllerUI {
   resultText: Text;
   betText: Text;
   totalSpinText: Text;
-  autoSpinButton: Graphics;
-  stopAutoSpinButton: Graphics;
+  autoSpinButton: Sprite;
+  stopAutoSpinButton: Sprite;
 }
 
 interface HighlightBox {
@@ -112,7 +111,7 @@ export class GameController {
 
     this.credits = config.initialCredits;
     this.bet = config.initialBet;
-    this.ui.creditsText.text = `Balance: ${this.credits}`;
+    this.ui.creditsText.text = this.credits.toFixed(2);
     this.ui.betText.text = `Bet: ${this.bet}`;
   }
 
@@ -150,13 +149,13 @@ export class GameController {
   deductBet(): void {
     if (!this.inFreeSpins) {
       this.credits -= this.bet;
-      this.ui.creditsText.text = `Balance: ${this.credits}`;
+      this.ui.creditsText.text = this.credits.toFixed(2);
     }
   }
 
   addCredits(amount: number): void {
     this.credits += amount;
-    this.ui.creditsText.text = `Balance: ${this.credits}`;
+    this.ui.creditsText.text = this.credits.toFixed(2);
   }
 
   hasEnoughCredits(): boolean {
@@ -505,7 +504,7 @@ export class GameController {
     if (totalPayout > 0) {
       this.addCredits(totalPayout);
     }
-    this.ui.creditsText.text = `Balance: ${this.credits}`;
+    this.ui.creditsText.text = this.credits.toFixed(2);
 
     // ---- STEP 8: Display total payout (dynamic from paytable + winning combinations) ----
     if (totalPayout > 0 && spinsWonThisSpin > 0) {
