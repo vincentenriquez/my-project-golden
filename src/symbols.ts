@@ -5,10 +5,10 @@
  */
 
 export const SYMBOL_ASSETS = [
-  "/cherry.png",
-  "/lemon.png",
-  "/orange.png",
-  "/plum.png",
+  "/cherrySlice.png",
+  "/lemonSlice.png",
+  "/orangeSlice.png",
+  "/plumSlice.png",
   "/grape.png",
   "/watermelon.png",
   "/mango.png",
@@ -45,6 +45,7 @@ export const PAYTABLE: number[][] = [
   [0, 0, 10, 50, 250, 500], // 8 wild (highest-paying symbol)
   [0, 0, 0, 2, 8, 30],      // 9 scatter (paid via SCATTER_PAYTABLE)
 ];
+
 
 /**
  * Scatter: pays by total count anywhere on reels (position independent).

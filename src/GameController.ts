@@ -60,17 +60,19 @@ export interface GameControllerConfig {
 export interface GameControllerUI {
   creditsText: Text;
   resultText: Text;
-  betText: Text;
+  amountLabel: Text;
   totalSpinText: Text;
+  totalWinText: Text;
+  dimOverlay: Graphics;
   autoSpinButton: Sprite;
   stopAutoSpinButton: Sprite;
 }
 
 interface HighlightBox {
-  graphics: Graphics;
-  reelIndex: number;
-  rowIndex: number;
-  pulseTime: number;
+  sprite: Sprite;          // original sprite (hidden during win)
+  clone: Sprite;           // clone rendered on highlightLayer above dimOverlay
+  originalScale: number;
+  originalAlpha: number;
 }
 
 /**
@@ -93,6 +95,8 @@ export class GameController {
   private autoSpinActive = false;
   private autoSpinsRemaining = 0;
   private highlightBoxes: HighlightBox[] = [];
+  private sharedPulseTime = 0;
+  private winningReelIndices: Set<number> = new Set();
 
   constructor(
     reels: Reel[],
@@ -112,7 +116,9 @@ export class GameController {
     this.credits = config.initialCredits;
     this.bet = config.initialBet;
     this.ui.creditsText.text = this.credits.toFixed(2);
-    this.ui.betText.text = `Bet: ${this.bet}`;
+    this.ui.amountLabel.text = this.bet.toFixed(2);
+    this.ui.totalWinText.text = "0.00";
+    this.ui.dimOverlay.visible = false;
   }
 
   getCredits(): number {
@@ -163,7 +169,7 @@ export class GameController {
   }
 
   updateBetDisplay(): void {
-    this.ui.betText.text = `Bet: ${this.bet}`;
+    this.ui.amountLabel.text = this.bet.toFixed(2);
   }
 
   /** Generate a result matrix (per-reel columns). */
@@ -261,12 +267,21 @@ export class GameController {
     this.reels.forEach((r) => r.updateSprites());
   }
 
+/**
+   * All winning symbols share ONE pulseTime → they all scale up and down together.
+   * Scale bounces between 0.88× and 1.12× of each sprite's original scale.
+   * Alpha pulses between 0.7 and 1.0.
+   */
   updateHighlightAnimation(deltaTime: number): void {
+    if (this.highlightBoxes.length === 0) return;
+
+    this.sharedPulseTime += deltaTime * 0.08;
+    const pulse = Math.sin(this.sharedPulseTime) * 0.5 + 0.5;
+
     this.highlightBoxes.forEach((box) => {
-      box.pulseTime += deltaTime * 0.05;
-      const pulse = Math.sin(box.pulseTime) * 0.5 + 0.5;
-      box.graphics.alpha = 0.6 + pulse * 0.4;
-      box.graphics.scale.set(1.0 + pulse * 0.08);
+      // Animate the CLONE, not the hidden original
+      box.clone.scale.set(box.originalScale * (0.88 + pulse * 0.24));
+      box.clone.alpha = 0.7 + pulse * 0.3;
     });
   }
 
@@ -361,75 +376,65 @@ export class GameController {
     return expanded;
   }
 
-  private highlightSpriteAt(
-    reelIndex: number,
-    rowIndex: number,
-    color: number = 0xffd700
-  ): void {
-    const { reelWidth, symbolSize } = this.config;
-    const box = new Graphics();
-    box.lineStyle(6, color, 0.6);
-    box.drawRoundedRect(
-      reelIndex * reelWidth + 3,
-      rowIndex * symbolSize + 3,
-      reelWidth - 6,
-      symbolSize - 6,
-      10
-    );
-    box.lineStyle(4, color, 0.8);
-    box.drawRoundedRect(
-      reelIndex * reelWidth + 5,
-      rowIndex * symbolSize + 5,
-      reelWidth - 10,
-      symbolSize - 10,
-      8
-    );
-    box.lineStyle(2, 0xffffff, 1);
-    box.beginFill(color, 0.1);
-    box.drawRoundedRect(
-      reelIndex * reelWidth + 8,
-      rowIndex * symbolSize + 8,
-      reelWidth - 16,
-      symbolSize - 16,
-      6
-    );
-    box.endFill();
-    box.pivot.set(
-      reelIndex * reelWidth + reelWidth / 2,
-      rowIndex * symbolSize + symbolSize / 2
-    );
-    box.position.set(
-      reelIndex * reelWidth + reelWidth / 2,
-      rowIndex * symbolSize + symbolSize / 2
-    );
-    this.highlightLayer.addChild(box);
+  private highlightSpriteAt(reelIndex: number, rowIndex: number): void {
+    const sprite = this.reels[reelIndex].getSpriteAt(rowIndex);
+    if (!sprite) return;
+    if (this.highlightBoxes.some((h) => h.sprite === sprite)) return;
+
+    // Create a clone with the same texture
+    const clone = new Sprite(sprite.texture);
+    clone.scale.set(sprite.scale.x, sprite.scale.y);
+    clone.anchor.set(sprite.anchor.x, sprite.anchor.y);
+
+    // Convert sprite's world position into highlightLayer's local space
+    const worldPos = sprite.getGlobalPosition();
+    const localPos = this.highlightLayer.toLocal(worldPos);
+    clone.x = localPos.x + sprite.width / 2;
+    clone.y = localPos.y + sprite.height / 2;
+    clone.anchor.set(0.5);
+
+    this.highlightLayer.addChild(clone);
+
+    // Hide the original so only the clone shows
+    sprite.alpha = 0;
+
     this.highlightBoxes.push({
-      graphics: box,
-      reelIndex,
-      rowIndex,
-      pulseTime: Math.random() * Math.PI * 2,
+      sprite,
+      clone,
+      originalScale: sprite.scale.x,
+      originalAlpha: 1,
     });
   }
 
   clearHighlights(): void {
     this.highlightBoxes.forEach((box) => {
-      this.highlightLayer.removeChild(box.graphics);
-      box.graphics.destroy();
+      // Restore original sprite
+      box.sprite.scale.set(box.originalScale);
+      box.sprite.alpha = 1;
+      // Remove and destroy the clone
+      this.highlightLayer.removeChild(box.clone);
+      box.clone.destroy();
     });
-    this.highlightBoxes.length = 0;
+    this.highlightBoxes = [];
+
+    // winningReelIndices no longer needed for zIndex — but clear it anyway
+    this.winningReelIndices.clear();
+
+    this.sharedPulseTime = 0;
+    this.ui.dimOverlay.visible = false;
   }
 
   private evaluateAndShowResults(matrix: number[][]): void {
     const { reelsCount, symbolsPerReel } = this.config;
     this.clearHighlights();
 
-    // ---- STEP 1: Evaluate scatters on the ORIGINAL matrix (before wild expansion) ----
+    // STEP 1: Evaluate scatters on ORIGINAL matrix
     const scatterResult = this.evaluateScatters(matrix, this.bet);
 
-    // ---- STEP 2: Expand wilds (preserves scatters thanks to applyExpandingWilds fix) ----
+    // STEP 2: Expand wilds
     const expandedMatrix = this.applyExpandingWilds(matrix);
 
-    // ---- STEP 2b: Visually update reel sprites for expanded positions ----
+    // STEP 2b: Visually update reel sprites for expanded positions
     this.reels.forEach((r) => r.clearVisualOverrides());
     for (let reel = 0; reel < reelsCount; reel++) {
       for (let row = 0; row < symbolsPerReel; row++) {
@@ -440,49 +445,44 @@ export class GameController {
     }
     this.updateReelsVisuals();
 
-    // ---- STEP 3: Evaluate 243-ways on the EXPANDED matrix ----
+    // STEP 3: Evaluate 243-ways on EXPANDED matrix
     const waysResults = this.evaluateWays(expandedMatrix, this.bet);
 
-    // ---- STEP 4: Highlight expanding-wild reels (cyan) ----
+    // STEP 4: Register expanding-wild sprites for highlight
     for (let reel = 0; reel < reelsCount; reel++) {
       let hasWild = false;
       for (let row = 0; row < symbolsPerReel; row++) {
-        if (expandedMatrix[row][reel] === WILD_SYMBOL_ID) {
-          hasWild = true;
-          break;
-        }
+        if (expandedMatrix[row][reel] === WILD_SYMBOL_ID) { hasWild = true; break; }
       }
       if (hasWild) {
         for (let row = 0; row < symbolsPerReel; row++) {
-          this.highlightSpriteAt(reel, row, 0x00ffff);
+          this.highlightSpriteAt(reel, row);
         }
       }
     }
 
-    // ---- STEP 5: Sum ALL ways wins (industry standard: every symbol pays independently) ----
+    // STEP 5: Sum all ways wins + register winning symbol sprites
     let totalPayout = 0;
-
     waysResults.forEach((win) => {
       totalPayout += win.payout;
       for (let r = 0; r < win.hits; r++) {
         for (let row = 0; row < symbolsPerReel; row++) {
           const cell = expandedMatrix[row][r];
           if (cell === win.symbol || cell === WILD_SYMBOL_ID) {
-            this.highlightSpriteAt(r, row, 0xffd700);
+            this.highlightSpriteAt(r, row);
           }
         }
       }
     });
 
-    // ---- STEP 6: Scatter payout + free spins trigger ----
+    // STEP 6: Scatter payout + free spins trigger
     let spinsWonThisSpin = 0;
     if (scatterResult) {
       totalPayout += scatterResult.payout;
-      // Highlight scatters on the ORIGINAL matrix (they may be hidden on expanded)
       for (let r = 0; r < reelsCount; r++) {
         for (let row = 0; row < symbolsPerReel; row++) {
           if (matrix[row][r] === SCATTER_SYMBOL_ID) {
-            this.highlightSpriteAt(r, row, 0xff00ff);
+            this.highlightSpriteAt(r, row);
           }
         }
       }
@@ -493,31 +493,37 @@ export class GameController {
           this.autoSpinActive = false;
           this.ui.autoSpinButton.visible = true;
           this.ui.stopAutoSpinButton.visible = false;
-          this.ui.totalSpinText.text = "Free spins: 0";
+          this.ui.totalSpinText.text = "Auto spins: 0";
         }
         this.freeSpinsRemaining += spinsWon;
         this.inFreeSpins = true;
       }
     }
 
-    // ---- STEP 7: Credit update ----
+    // STEP 7: Show/hide dimOverlay based on whether there are winning symbols
+    this.ui.dimOverlay.visible = this.highlightBoxes.length > 0;
+
+    // STEP 8: Credit update + total win display
     if (totalPayout > 0) {
       this.addCredits(totalPayout);
+      this.ui.totalWinText.text = totalPayout.toFixed(2);
+    } else {
+      this.ui.totalWinText.text = "0.00";
     }
     this.ui.creditsText.text = this.credits.toFixed(2);
 
-    // ---- STEP 8: Display total payout (dynamic from paytable + winning combinations) ----
+    // STEP 9: Result text
     if (totalPayout > 0 && spinsWonThisSpin > 0) {
-      this.ui.resultText.text = `WIN: ${totalPayout} | BONUS! ${spinsWonThisSpin} Free Spins!`;
+      this.ui.resultText.text = `WIN: ${totalPayout.toFixed(2)} | BONUS! ${spinsWonThisSpin} Free Spins!`;
     } else if (totalPayout > 0) {
-      this.ui.resultText.text = `WIN: ${totalPayout}`;
+      this.ui.resultText.text = `WIN: ${totalPayout.toFixed(2)}`;
     } else if (spinsWonThisSpin > 0) {
       this.ui.resultText.text = `BONUS! ${spinsWonThisSpin} Free Spins!`;
     } else {
-      this.ui.resultText.text = "No win. Try again!";
+      this.ui.resultText.text = "";
     }
 
-    // ---- Free spins continuation ----
+    // Free spins continuation
     if (this.inFreeSpins) {
       if (this.freeSpinsRemaining > 0) {
         this.freeSpinsRemaining--;
@@ -536,17 +542,15 @@ export class GameController {
       return;
     }
 
-    // ---- Auto spin continuation ----
+    // Auto spin continuation
     if (this.autoSpinActive) {
       this.autoSpinsRemaining--;
-      this.ui.totalSpinText.text = `Free spins: ${this.autoSpinsRemaining}`;
+      this.ui.totalSpinText.text = `Auto spins: ${this.autoSpinsRemaining}`;
       if (this.autoSpinsRemaining <= 0) {
         this.endAutoSpin();
         return;
       }
-      if (this.onAutoSpinContinue) {
-        this.onAutoSpinContinue();
-      }
+      if (this.onAutoSpinContinue) this.onAutoSpinContinue();
     }
   }
 

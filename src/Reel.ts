@@ -1,5 +1,6 @@
-// Reel.ts
+//Reels.ts
 import { Container, Sprite, Texture, BlurFilter } from "pixi.js";
+import { SymbolCell } from "./SymbolCell";
 
 export interface ReelConfig {
   reelWidth: number;
@@ -61,6 +62,14 @@ export class Reel {
   /** Call when textures are loaded/changed (e.g. after Assets.load). */
   setTextures(textures: Texture[]) {
     this.textures = textures;
+  }
+
+  /**
+   * Returns the Sprite at a given visible row index (0 = top).
+   * Returns null if out of range.
+   */
+  getSpriteAt(row: number): Sprite | null {
+    return this.sprites[row] ?? null;
   }
 
   /**
