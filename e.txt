@@ -79,3 +79,5 @@ Tom task
 -Double check the ways and wild
 -Adjancency rule
 -Highlight the 
+
+If there's 3 scatter,  the 10 free spins triggered. When the 10 free spins triggered, I want to collect the total win within that 10 free spins(show it below of "TOTAL WIN"). 

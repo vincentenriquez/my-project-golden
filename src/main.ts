@@ -81,7 +81,7 @@ backgroundLayer.zIndex = 0;
 machineLayer.zIndex    = 5;
 reelsLayer.zIndex      = 10;
 frameLayer.zIndex      = 20;
-highlightLayer.zIndex  = 30;
+highlightLayer.zIndex  = 25;
 uiLayer.zIndex         = 40;
 overlayLayer.zIndex    = 50;
 overlayLayer.sortableChildren = true;
@@ -498,19 +498,39 @@ function buildSlotMachine() {
   plusText.y = BTN_SIZE / 2;
   plusButton.addChild(plusText);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SUB-CONTAINER 4 : Auto spins counter                    │
-  // └─────────────────────────────────────────────────────────┘
-  const freeSpinsContainer = new Container();
-  freeSpinsContainer.x = 0;
-  freeSpinsContainer.y = ROW_GAP * 4 + 30;
-  controlsContainer.addChild(freeSpinsContainer);
+  // ┌─────────────────────────────────────────────────────────────────────────┐
+  // │ spinStatusContainer                                                     │
+  // │  ├── autoSpinText  →  "Auto spins: 10"  (hidden until auto spin starts) │
+  // │  └── freeSpinText  →  "Free spins: 10"  (hidden until bonus triggers)   │
+  // │  Both are centered at x=0. Only one should be visible at a time.        │
+  // └─────────────────────────────────────────────────────────────────────────┘
+  const spinStatusContainer = new Container();
+  spinStatusContainer.x = 0;
+  spinStatusContainer.y = ROW_GAP * 4 + 30;
+  controlsContainer.addChild(spinStatusContainer);
 
-  const totalSpinText = new Text("Auto spins: 0", style);
-  totalSpinText.anchor.set(0.5);
-  totalSpinText.x = 0;
-  totalSpinText.y = -155;
-  freeSpinsContainer.addChild(totalSpinText);
+  const spinStatusStyle = new TextStyle({
+    fontSize: 20,
+    fontWeight: "bold",
+    fill: 0xFDF1C0,
+    fontFamily: "Arial",
+  });
+
+  // Auto spin counter — shown only while auto spin is active
+  const autoSpinText = new Text("AUTO SPINS: 0", spinStatusStyle);
+  autoSpinText.anchor.set(0.5);
+  autoSpinText.x = 0;
+  autoSpinText.y = -155;
+  autoSpinText.visible = false;          // hidden until startAutoSpin()
+  spinStatusContainer.addChild(autoSpinText);
+
+  // Free spin counter — shown only during bonus free spins
+  const freeSpinText = new Text("FREE SPINS LEFT: 0", spinStatusStyle);
+  freeSpinText.anchor.set(0.5);
+  freeSpinText.x = 0;
+  freeSpinText.y = -155;
+  freeSpinText.visible = false;          // hidden until scatter bonus triggers
+  spinStatusContainer.addChild(freeSpinText);
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ SUB-CONTAINER 5 : Quick bet buttons  10 / 50 / 100      │
@@ -583,7 +603,7 @@ function buildSlotMachine() {
       return;
     }
     gameController.deductBet();
-    tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 2, 700, (t: number) => t);
+    tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 4, 700, (t: number) => t);
     const result = gameController.generateResult({ weighted: true });
     gameController.spinToResult(result);
   });
@@ -627,7 +647,7 @@ function buildSlotMachine() {
   gameController = new GameController(
     reels,
     controllerConfig,
-    { creditsText, resultText, amountLabel, totalSpinText, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
+    { creditsText, resultText, amountLabel, autoSpinText, freeSpinText, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
     highlightLayer,
     tweenTo,
     backout
