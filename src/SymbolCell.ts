@@ -1,69 +1,116 @@
+//SymbolCell.ts
+
 import { Container, Sprite, Graphics, Texture } from "pixi.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Colour palette — Sweet Harvest frame (amber-gold)
+//
+//  Source                          Hex        Role
+//  ─────────────────────────────── ────────── ──────────────────────────────
+//  Shadow side of golden frame     #c47a00    AMBER_DEEP  — outermost fog
+//  Mid-tone ornate frame scrollwork#e09400    AMBER_MID   — wide halo band
+//  Main frame colour               #f5b800    GOLD_BRIGHT — peak bloom ring
+//  Brightest frame highlight       #ffd040    GOLD_HOT    — crisp rim + core
+//  Rays vs blue-grey reels         #f0a800    RAY_AMBER   — ray body
+//  Ray bright centre               #ffc840    RAY_TIP     — ray core strip
+// ─────────────────────────────────────────────────────────────────────────────
+const AMBER_DEEP   = 0xc47a00;
+const AMBER_MID    = 0xe09400;
+const GOLD_BRIGHT  = 0xf5b800;
+// const GOLD_HOT     = 0xffd040;
+const GOLD_CORE    = 0xffeea0;   // pale gold — subtle inner warmth
+const RAY_AMBER    = 0xf0a800;
+const RAY_TIP      = 0xffc840;
 
 /**
  * SymbolCell — one Container per visible symbol slot.
  *
- * Win highlight is a TWO-LAYER glow system:
- *   1. glowRing    (Graphics) — static soft outer halo + inner ring, drawn once.
- *                               Alpha is driven externally via showGlow(alpha).
- *   2. raysGraphics (Graphics) — 8 tapered light-ray spokes that rotate.
- *                               Redrawn each frame ONLY when win is active.
- *                               Kept separate so glowRing has zero per-frame GC cost.
+ * Win highlight: Circular Symbol Highlight + Outside Ray Burst
+ * ─────────────────────────────────────────────────────────────
+ * Architecture (same as reference-matched version):
+ *   • Circle glow ON the symbol  — amber-gold bloom, tight to symbol edge
+ *   • Rays OUTSIDE the circle    — warm amber shafts starting at circle edge
  *
- * Symbol sprite uses a circular Graphics mask so the glow appears to emanate
- * from a disc, giving a premium "halo around a coin" look.
+ * Layer stack (bottom → top)
+ * ──────────────────────────
+ *  1. background      transparent hit rect
+ *  2. raysGraphics    amber rays — bases on circle edge, tips at cell corners
+ *  3. circleGlow      amber-gold bloom — stacked filled circles
+ *  4. sprite          symbol (circular-masked, always sharp)
+ *  5. circleMask      masks sprite to disc
+ *  6. innerBloom      very subtle warm gold tint above sprite centre
+ *  7. rimCircle       crisp gold ring (drawn once, alpha animated)
  *
- * Scale bounce is DISABLED — layout never changes during animation.
+ * Key tuning vs previous version
+ * ────────────────────────────────
+ *  GLOW_EXTRA reduced:  16 → 6 px   (circle hugs the symbol tighter)
+ *  RAY_GAP    reduced:   3 → 2 px   (rays start almost flush to circle edge)
+ *  All pink/purple colours replaced with amber-gold palette above
  */
 export class SymbolCell extends Container {
-  public readonly sprite:      Sprite;
-  public readonly background:  Graphics;
+  public  readonly sprite:      Sprite;
+  public  readonly background:  Graphics;
 
-  /** Outer static halo ring — alpha driven by showGlow() */
-  private readonly glowRing:   Graphics;
-
-  /** Rotating ray spokes — redrawn each frame while win is active */
   private readonly raysGraphics: Graphics;
+  private readonly circleGlow:   Graphics;
+  private readonly innerBloom:   Graphics;
+  private readonly rimCircle:    Graphics;
+  private readonly circleMask:   Graphics;
 
-  /** Circular mask for the symbol sprite */
-  private readonly circleMask: Graphics;
-
-  public symbolId: number = -1;
+  public  symbolId: number = -1;
 
   private readonly cellW:   number;
   private readonly cellH:   number;
-  private readonly cx:      number;   // cell centre X
-  private readonly cy:      number;   // cell centre Y
-  private readonly radius:  number;   // symbol circle radius
+  private readonly cx:      number;
+  private readonly cy:      number;
+  private readonly spriteR: number;   // sprite mask radius
+  private readonly glowR:   number;   // bloom circle radius (spriteR + GLOW_EXTRA)
 
-  /** Current rotation angle of the ray layer (radians) */
-  private rayAngle = 0;
-
-  /** Whether the glow / rays are currently active */
+  // Animation state
+  private rayAngle   = 0;
+  private pulsePhase = 0;
   private glowActive = false;
+
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  /** Extra radius beyond sprite circle — REDUCED for tighter circle */
+  private static readonly GLOW_EXTRA  = 0;
+  /** Gap between glow circle edge and ray base (px) */
+  private static readonly RAY_GAP     = 0.5;
+  /** Number of rays */
+  private static readonly RAY_COUNT   = 24;
+  /** Rotation speed */
+  private static readonly RAY_SPEED   = 0.008;
+  /** Pulse speed */
+  private static readonly PULSE_SPEED = 0.055;
 
   constructor(texture: Texture, symbolId: number, width: number, height: number) {
     super();
-    this.cellW    = width;
-    this.cellH    = height;
-    this.cx       = width  / 2;
-    this.cy       = height / 2;
-    this.radius   = Math.min(width, height) / 2 - 2;   // tight fit
+    this.cellW   = width;
+    this.cellH   = height;
+    this.cx      = width  / 2;
+    this.cy      = height / 2;
+    this.spriteR = Math.min(width, height) / 2 - 2;
+    this.glowR   = this.spriteR + SymbolCell.GLOW_EXTRA;
     this.symbolId = symbolId;
 
-    // ── 1. Background ─────────────────────────────────────────────────────────
+    // ── 1. Background ─────────────────────────────────────────────────────
     this.background = new Graphics();
-    this.background.beginFill(0x111111);
+    this.background.beginFill(0x111111, 0);
     this.background.drawRect(0, 0, width, height);
     this.background.endFill();
     this.addChild(this.background);
 
-    // ── 2. Rays layer (below sprite, redrawn each frame during win) ───────────
+    // ── 2. Rays (behind circle) ───────────────────────────────────────────
     this.raysGraphics         = new Graphics();
     this.raysGraphics.visible = false;
     this.addChild(this.raysGraphics);
 
-    // ── 3. Symbol sprite (centered, circular-masked) ──────────────────────────
+    // ── 3. Circle glow bloom (behind sprite) ──────────────────────────────
+    this.circleGlow         = new Graphics();
+    this.circleGlow.visible = false;
+    this.addChild(this.circleGlow);
+
+    // ── 4. Symbol sprite, clipped to spriteR ──────────────────────────────
     this.sprite        = new Sprite(texture);
     this.sprite.anchor.set(0.5);
     this.sprite.x      = this.cx;
@@ -71,24 +118,26 @@ export class SymbolCell extends Container {
     this._fitSprite();
     this.addChild(this.sprite);
 
-    // Circular mask — same Graphics node lives as a child so it transforms with the cell
     this.circleMask = new Graphics();
     this.circleMask.beginFill(0xffffff);
-    this.circleMask.drawCircle(this.cx, this.cy, this.radius);
+    this.circleMask.drawCircle(this.cx, this.cy, this.spriteR);
     this.circleMask.endFill();
     this.addChild(this.circleMask);
     this.sprite.mask = this.circleMask;
 
-    // ── 4. Static glow ring (above sprite, drawn once) ────────────────────────
-    this.glowRing         = new Graphics();
-    this.glowRing.visible = false;
-    this._drawGlowRing(1.0);          // draw once — alpha changed via .alpha property
-    this.addChild(this.glowRing);
+    // ── 5. Inner bloom (above sprite — very subtle warm tint) ─────────────
+    this.innerBloom         = new Graphics();
+    this.innerBloom.visible = false;
+    this.addChild(this.innerBloom);
+
+    // ── 6. Crisp rim circle (drawn once, alpha animated) ──────────────────
+    this.rimCircle         = new Graphics();
+    this.rimCircle.visible = false;
+    this._buildRimCircle();
+    this.addChild(this.rimCircle);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Public API
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── Public API ───────────────────────────────────────────────────────────
 
   setTexture(texture: Texture, symbolId: number): void {
     this.symbolId       = symbolId;
@@ -96,124 +145,211 @@ export class SymbolCell extends Container {
     this._fitSprite();
   }
 
-  /**
-   * Show glow ring + rays at the given alpha (0–1).
-   * Called every tick while a win sequence is active.
-   *
-   * @param alpha   0–1 ring + ray opacity
-   * @param delta   ticker.deltaTime — used to advance ray rotation
-   */
   showGlow(alpha = 1.0, delta = 0): void {
     const a = Math.max(0, Math.min(1, alpha));
+    this.glowActive = true;
 
-    this.glowActive           = true;
-    this.glowRing.visible     = true;
-    this.glowRing.alpha       = a;
+    this.rayAngle   += delta * SymbolCell.RAY_SPEED;
+    this.pulsePhase += delta * SymbolCell.PULSE_SPEED;
+
+    // Breathes 65 % → 100 %
+    const pulse = 0.65 + 0.35 * (0.5 + 0.5 * Math.sin(this.pulsePhase));
+    const pa    = a * pulse;
+
     this.raysGraphics.visible = true;
+    this.circleGlow.visible   = true;
+    this.innerBloom.visible   = true;
+    this.rimCircle.visible    = true;
+    this.rimCircle.alpha      = pa;
 
-    // Advance rotation
-    this.rayAngle += delta * 0.018;   // ~1 full turn every ~350 frames ≈ 6 s at 60fps
-
-    this._drawRays(a);
+    this._drawRays(pa);
+    this._drawCircleGlow(pa);
+    this._drawInnerBloom(pa);
   }
 
-  /** Instantly hide all glow effects and stop animation */
   hideGlow(): void {
     this.glowActive           = false;
-    this.glowRing.visible     = false;
     this.raysGraphics.visible = false;
+    this.circleGlow.visible   = false;
+    this.innerBloom.visible   = false;
+    this.rimCircle.visible    = false;
     this.raysGraphics.clear();
+    this.circleGlow.clear();
+    this.innerBloom.clear();
+    this.pulsePhase = 0;
+    this.rayAngle   = 0;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Private helpers
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── Private: sprite sizing ───────────────────────────────────────────────
 
   private _fitSprite(): void {
-    const padding = 8;
-    const maxR    = this.radius * 2 - padding;
-    const scale   = Math.min(
+    const maxR  = this.spriteR * 2 - 8;
+    const scale = Math.min(
       maxR / this.sprite.texture.width,
       maxR / this.sprite.texture.height
     );
     this.sprite.scale.set(scale);
   }
 
-  /**
-   * Drawn ONCE at construction.  Alpha is mutated via glowRing.alpha — zero redraws.
-   *
-   * Layer stack (outward → inward):
-   *   • Very wide, near-transparent halo (atmosphere)
-   *   • Medium soft ring
-   *   • Thin crisp inner ring
-   */
-  private _drawGlowRing(alpha: number): void {
-    const r  = this.radius;
-    const cx = this.cx;
-    const cy = this.cy;
-
-    this.glowRing.clear();
-
-    // Atmosphere — very wide, very soft golden fog
-    this.glowRing.lineStyle(22, 0xffd966, alpha * 0.18);
-    this.glowRing.drawCircle(cx, cy, r + 14);
-
-    // Medium soft halo
-    this.glowRing.lineStyle(10, 0xffe680, alpha * 0.35);
-    this.glowRing.drawCircle(cx, cy, r + 6);
-
-    // Bright inner ring
-    this.glowRing.lineStyle(3, 0xffffff, alpha * 0.90);
-    this.glowRing.drawCircle(cx, cy, r + 1);
-
-    // Subtle second ring just outside
-    this.glowRing.lineStyle(2, 0xffd700, alpha * 0.55);
-    this.glowRing.drawCircle(cx, cy, r + 5);
-  }
+  // ─── Private: amber rays starting at glowR edge ───────────────────────────
 
   /**
-   * Redrawn each frame while glow is active.
-   * Draws 8 tapered spokes that rotate slowly clockwise.
+   * Triangle rays where each base sits ON glowR (the glow circle edge).
+   * Tips reach beyond the cell diagonal — rays cover the full background.
    *
-   * Each spoke is a filled quadrilateral:
-   *   inner point  → near edge of circle
-   *   outer tip    → some distance beyond circle edge
-   *   width tapers from a few px at inner to 0 at the tip
+   * Two layers per main ray:
+   *   BODY  — warm amber fill, semi-transparent
+   *   CORE  — brighter gold strip down the centre
+   * Short alternate rays add depth without clutter.
    */
-  private _drawRays(alpha: number): void {
-    const g        = this.raysGraphics;
+  private _drawRays(pa: number): void {
+    const g  = this.raysGraphics;
     g.clear();
+    g.lineStyle(0);
 
-    const RAY_COUNT    = 8;
-    const INNER_R      = this.radius + 4;   // start just outside the ring
-    const OUTER_R      = this.radius + 28;  // tip of the ray
-    const HALF_ANGLE   = 0.10;              // half angular width of the ray base (radians)
+    const cx     = this.cx;
+    const cy     = this.cy;
+    const N      = SymbolCell.RAY_COUNT;
+    const BASE_R = this.glowR + SymbolCell.RAY_GAP;
+    const TIP_R  = Math.sqrt(this.cellW * this.cellW + this.cellH * this.cellH) * 0.59;
 
-    for (let i = 0; i < RAY_COUNT; i++) {
-      const baseAngle = this.rayAngle + (i / RAY_COUNT) * Math.PI * 2;
+    const HALF_A      = (Math.PI * 2 / N) * 0.22;
+    const HALF_A_CORE = HALF_A * 0.28;
 
-      // The four corners of the tapered spoke
-      const x0 = this.cx + Math.cos(baseAngle - HALF_ANGLE) * INNER_R;
-      const y0 = this.cy + Math.sin(baseAngle - HALF_ANGLE) * INNER_R;
+    for (let i = 0; i < N; i++) {
+      const angle  = this.rayAngle + (i / N) * Math.PI * 2;
+      const isMain = i % 2 === 0;
+      const tipR   = isMain ? TIP_R : TIP_R * 0.55;
 
-      const x1 = this.cx + Math.cos(baseAngle + HALF_ANGLE) * INNER_R;
-      const y1 = this.cy + Math.sin(baseAngle + HALF_ANGLE) * INNER_R;
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
 
-      const xtip = this.cx + Math.cos(baseAngle) * OUTER_R;
-      const ytip = this.cy + Math.sin(baseAngle) * OUTER_R;
+      // Base corners on the circle circumference
+      const bLx = cx + Math.cos(angle - HALF_A) * BASE_R;
+      const bLy = cy + Math.sin(angle - HALF_A) * BASE_R;
+      const bRx = cx + Math.cos(angle + HALF_A) * BASE_R;
+      const bRy = cy + Math.sin(angle + HALF_A) * BASE_R;
+      const tX  = cx + cosA * tipR;
+      const tY  = cy + sinA * tipR;
 
-      // Alternate long/short rays for a starburst variation
-      const isLong  = i % 2 === 0;
-      const tipX    = isLong ? xtip : this.cx + Math.cos(baseAngle) * (INNER_R + 10);
-      const tipY    = isLong ? ytip : this.cy + Math.sin(baseAngle) * (INNER_R + 10);
-      const rayAlpha = isLong ? alpha * 0.55 : alpha * 0.30;
-
-      g.beginFill(0xfff0a0, rayAlpha);
-      g.moveTo(x0, y0);
-      g.lineTo(x1, y1);
-      g.lineTo(tipX, tipY);
+      // Outer body — warm amber
+      g.beginFill(RAY_AMBER, pa * (isMain ? 0.48 : 0.22));
+      g.moveTo(bLx, bLy);
+      g.lineTo(bRx, bRy);
+      g.lineTo(tX,  tY);
       g.closePath();
       g.endFill();
+
+      // Bright gold core (main rays only)
+      if (isMain) {
+        const cLx = cx + Math.cos(angle - HALF_A_CORE) * BASE_R;
+        const cLy = cy + Math.sin(angle - HALF_A_CORE) * BASE_R;
+        const cRx = cx + Math.cos(angle + HALF_A_CORE) * BASE_R;
+        const cRy = cy + Math.sin(angle + HALF_A_CORE) * BASE_R;
+
+        g.beginFill(RAY_TIP, pa * 0.70);
+        g.moveTo(cLx, cLy);
+        g.lineTo(cRx, cRy);
+        g.lineTo(tX,  tY);
+        g.closePath();
+        g.endFill();
+
+        // Small bright flare dot at the tip
+        // g.beginFill(GOLD_HOT, pa * 0.55);
+        // g.drawCircle(tX, tY, 3.5);
+        // g.endFill();
+      }
     }
+  }
+
+  // ─── Private: amber-gold circular bloom ───────────────────────────────────
+
+  /**
+   * Stacked filled circles simulating a warm amber radial gradient.
+   * Ordered largest → smallest so inner layers paint over outer ones.
+   *
+   * The bloom peaks just outside spriteR and fades inward — symbol is
+   * never covered strongly (inner layers stay below 15% opacity).
+   */
+  private _drawCircleGlow(pa: number): void {
+    const g  = this.circleGlow;
+    g.clear();
+    g.lineStyle(0);
+
+    const cx = this.cx;
+    const cy = this.cy;
+    const gr = this.glowR;
+    const sr = this.spriteR;
+
+    // [radius, colour, max-opacity × pa]  — largest first
+    const layers: [number, number, number][] = [
+      [gr + 14, AMBER_DEEP,  0.13],   // wide deep amber fog
+      [gr +  8, AMBER_DEEP,  0.20],   // outer atmosphere
+      [gr +  3, AMBER_MID,   0.32],   // warm amber band
+      [gr,      GOLD_BRIGHT, 0.50],   // peak — bright gold right on circle edge
+      [gr -  3, GOLD_BRIGHT, 0.40],   // just inside edge
+      // [sr +  3, GOLD_HOT,    0.24],   // golden warmth near sprite boundary
+      [sr -  2, GOLD_CORE,   0.12],   // very subtle pale gold inside sprite
+    ];
+
+    for (const [r, color, opacity] of layers) {
+      if (r <= 0) continue;
+      g.beginFill(color, opacity * pa);
+      g.drawCircle(cx, cy, r);
+      g.endFill();
+    }
+  }
+
+  // ─── Private: subtle inner bloom above sprite ─────────────────────────────
+
+  /**
+   * Soft warm gold tint painted ABOVE the sprite — max ~12% opacity.
+   * Adds the "lit from within" warmth without obscuring the fruit.
+   */
+  private _drawInnerBloom(pa: number): void {
+    const g = this.innerBloom;
+    g.clear();
+    g.lineStyle(0);
+
+    // g.beginFill(GOLD_HOT, pa * 0.08);
+    // g.drawCircle(this.cx, this.cy, this.spriteR - 2);
+    // g.endFill();
+
+    g.beginFill(GOLD_CORE, pa * 0.12);
+    g.drawCircle(this.cx, this.cy, this.spriteR * 0.45);
+    g.endFill();
+  }
+
+  // ─── Private: crisp rim circle (drawn once) ───────────────────────────────
+
+  /**
+   * Three concentric rings drawn ONCE at construction — zero per-frame cost.
+   * Colours echo the antique-gold ornate frame of the machine directly.
+   *
+   *   Outer soft halo  — deep amber, wide line
+   *   Main crisp ring  — bright gold GOLD_HOT, sits right on glowR
+   *   Inner accent     — pale gold GOLD_CORE
+   */
+  private _buildRimCircle(): void {
+    const g  = this.rimCircle;
+    const cx = this.cx;
+    const cy = this.cy;
+    const gr = this.glowR;
+
+    g.clear();
+
+    // Outer soft halo
+    g.lineStyle(6, AMBER_MID, 0.45);
+    g.drawCircle(cx, cy, gr + 5);
+
+    // Crisp main ring — bright gold matching frame highlight
+    // g.lineStyle(2.5, GOLD_HOT, 1.00);
+    // g.drawCircle(cx, cy, gr);
+
+    // Inner accent
+    g.lineStyle(1.5, GOLD_CORE, 0.65);
+    g.drawCircle(cx, cy, gr - 4);
+
+    g.lineStyle(0);
   }
 }

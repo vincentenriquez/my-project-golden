@@ -5,14 +5,14 @@
  */
 
 export const SYMBOL_ASSETS = [
-  "/cherrySlice.png",
-  "/lemonSlice.png",
-  "/orangeSlice.png",
-  "/plumSlice.png",
-  "/grapeSlice.png",
+  "/cherry.png",
+  "/strawberry.png",
   "/watermelonSlice.png",
+  "/plums.png",
+  "/grapes.png",
+  "/lemonSlice.png",
   "/mangoSlice.png",
-  "/strawberrySlice.png",
+  "/orangeSlice.png",
   "/wild.png",
   "/scatter.png",
 ];
@@ -35,13 +35,13 @@ export const SYMBOL_WEIGHTS: number[] = [
 /** Paytable: [symbolId][count] => payout multiplier per bet */
 export const PAYTABLE: number[][] = [
   [0, 0, 4, 14, 60, 200],   // 0 cherry
-  [0, 0, 4, 12, 50, 180],   // 1 lemon
-  [0, 0, 3, 10, 40, 160],   // 2 orange
+  [0, 0, 4, 12, 50, 180],   // 1 strawberry
+  [0, 0, 3, 10, 40, 160],   // 2 watermelon 
   [0, 0, 3, 8, 35, 140],    // 3 plum
   [0, 0, 2, 6, 30, 120],    // 4 grape
-  [0, 0, 2, 5, 25, 100],    // 5 watermelon
+  [0, 0, 2, 5, 25, 100],    // 5 lemon
   [0, 0, 6, 25, 90, 300],   // 6 mango (high)
-  [0, 0, 8, 30, 120, 400],  // 7 strawberry (high)
+  [0, 0, 8, 30, 120, 400],  // 7 orange (high)
   [0, 0, 10, 50, 250, 500], // 8 wild (highest-paying symbol)
   [0, 0, 0, 2, 8, 30],      // 9 scatter (paid via SCATTER_PAYTABLE)
 ];

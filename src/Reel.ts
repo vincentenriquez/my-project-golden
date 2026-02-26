@@ -1,3 +1,4 @@
+//Reel.ts
 import { Container, Sprite, Texture, BlurFilter } from "pixi.js";
 import { SymbolCell } from "./SymbolCell";
 
@@ -12,10 +13,18 @@ export interface ReelConfig {
 /**
  * Reel — uses SymbolCell containers so GameController can call
  * getContainerAt(row) to access showGlow() / hideGlow() directly.
+ *
+ * Suspension API
+ * ──────────────
+ * When GameController reparents a SymbolCell into winFloatLayer for the
+ * fly-up animation it calls suspendCell(cell).  While suspended the cell is
+ * skipped inside updateSprites() so the reel ticker cannot overwrite the
+ * animation's x/y/alpha.  restoreCell(cell) re-enables normal updates once
+ * the animation returns the cell to its original parent.
  */
 export class Reel {
   readonly container: Container;
-  readonly symbolCells: SymbolCell[] = [];
+  public readonly symbolCells: SymbolCell[] = [];
   readonly strip: number[];
   readonly sprites: Sprite[] = [];
   position: number = 0;
@@ -25,6 +34,12 @@ export class Reel {
   private readonly config: ReelConfig;
   private textures: Texture[] = [];
   private visualOverrides: Map<number, number> = new Map();
+
+  /**
+   * Cells currently reparented into winFloatLayer.
+   * updateSprites() skips any cell found in this set.
+   */
+  private suspendedCells: Set<SymbolCell> = new Set();
 
   constructor(config: ReelConfig, textures: Texture[]) {
     this.config   = config;
@@ -50,6 +65,26 @@ export class Reel {
     this.position         = Math.floor(Math.random() * this.strip.length);
     this.previousPosition = this.position;
   }
+
+  // ── Suspension API ────────────────────────────────────────────────────────
+
+  /**
+   * Mark a cell as floating — updateSprites() will skip it until restored.
+   * Call this BEFORE reparenting the cell out of this reel's container.
+   */
+  suspendCell(cell: SymbolCell): void {
+    this.suspendedCells.add(cell);
+  }
+
+  /**
+   * Re-enable normal reel updates for a cell after it has been returned to
+   * its original parent.  The next updateSprites() call will sync it again.
+   */
+  restoreCell(cell: SymbolCell): void {
+    this.suspendedCells.delete(cell);
+  }
+
+  // ── Existing API (unchanged) ──────────────────────────────────────────────
 
   /** Returns the SymbolCell container at a visible row. Used by GameController for glow. */
   getContainerAt(row: number): SymbolCell | null {
@@ -77,6 +112,12 @@ export class Reel {
 
     for (let sIdx = 0; sIdx < this.symbolCells.length; sIdx++) {
       const cell = this.symbolCells[sIdx];
+
+      // ── Skip suspended (floating) cells entirely ──────────────────────────
+      // The cell has been reparented into winFloatLayer; writing y here would
+      // fight the animation and cause flickering.
+      if (this.suspendedCells.has(cell)) continue;
+
       const stripIndex = (normalizedTop + sIdx) % len;
       const baseId = this.strip[stripIndex];
       const symbolId = this.visualOverrides.get(sIdx) ?? baseId;

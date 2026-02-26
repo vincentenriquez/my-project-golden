@@ -12,6 +12,8 @@ import {
 import { SYMBOL_ASSETS } from "./symbols";
 import { Reel } from "./Reel";
 import { GameController } from "./GameController";
+import { WinCountUp, CountUpCallback } from "./WinCountUp";
+import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
 const REEL_WIDTH = 155;
@@ -38,7 +40,7 @@ document.body.appendChild(app.canvas);
 const gameContainer = new Container();
 app.stage.addChild(gameContainer);
 
-const frameTexture = await Assets.load("/Frame_2.png");
+const frameTexture = await Assets.load("/Frame_3.png");
 const frameSprite = new Sprite(frameTexture);
 frameSprite.anchor.set(0.5);
 gameContainer.addChild(frameSprite);
@@ -66,11 +68,20 @@ const highlightLayer  = new Container();
 const uiLayer         = new Container();
 const overlayLayer    = new Container();
 
+/**
+ * winFloatLayer — sits ABOVE highlightLayer (zIndex 35) so floating clones
+ * render on top of glow effects but below the UI.
+ * It lives as a direct child of gameContainer, so its local coordinate space
+ * matches gameContainer exactly (no extra offset needed).
+ */
+const winFloatLayer = new Container();
+
 app.stage.addChild(backgroundLayer);
 gameContainer.addChild(machineLayer);
 gameContainer.addChild(reelsLayer);
 gameContainer.addChild(frameLayer);
 gameContainer.addChild(highlightLayer);
+gameContainer.addChild(winFloatLayer);   // ← NEW
 gameContainer.addChild(uiLayer);
 gameContainer.addChild(overlayLayer);
 
@@ -81,7 +92,8 @@ backgroundLayer.zIndex = 0;
 machineLayer.zIndex    = 5;
 reelsLayer.zIndex      = 10;
 frameLayer.zIndex      = 20;
-highlightLayer.zIndex  = 25;
+highlightLayer.zIndex  = 30;
+winFloatLayer.zIndex   = 35;             // ← above highlights, below UI
 uiLayer.zIndex         = 40;
 overlayLayer.zIndex    = 50;
 overlayLayer.sortableChildren = true;
@@ -134,6 +146,7 @@ let gameController: GameController;
 
 // ---------- Load Assets ----------
 await Assets.load([...SYMBOL_ASSETS, BG_IMAGE, "/Frame_13.png", "/playBtnn.png", "/stopBtnn.png"]);
+const bgQuickBtn = Texture.from("/bgQuickBtn.png");
 const spinTexture = Texture.from("/Frame_13.png");
 const autoSpinPlay = Texture.from("/playBtnn.png");
 const autoSpinStop = Texture.from("/stopBtnn.png");
@@ -181,6 +194,10 @@ function buildSlotMachine() {
   highlightLayer.x = 0;
   highlightLayer.y = 0;
 
+  // winFloatLayer shares the same origin as gameContainer (no offset needed)
+  winFloatLayer.x = 0;
+  winFloatLayer.y = 0;
+
   // ── Frame decoration ────────────────────────────────────────────────────────
   const padding = 10;
   const frame = new Graphics();
@@ -219,24 +236,23 @@ function buildSlotMachine() {
   }
 
   // ── Dim overlay (covers reels when there's a win) ──────────────────────────
-  // Sits between reelsLayer (zIndex 10) and highlightLayer (zIndex 30)
   const dimOverlay = new Graphics();
-  dimOverlay.beginFill(0x000000, 0.55);
+  dimOverlay.beginFill(0x000000, 0);
   dimOverlay.drawRect(
-    -frameSprite.width / 2,  // full frame left edge
-    -frameSprite.height / 2, // full frame top edge
+    -frameSprite.width / 2,
+    -frameSprite.height / 2,
     frameSprite.width,
     frameSprite.height
   );
   dimOverlay.endFill();
   dimOverlay.x = 0;
   dimOverlay.y = -75;
-  dimOverlay.zIndex = 25;    // above frameLayer (20), below highlightLayer (30)
+  dimOverlay.zIndex = 25;
   dimOverlay.visible = false;
-  dimOverlay.height = 400; // extend below reels to cover spin button
+  dimOverlay.height = 400;
   gameContainer.addChild(dimOverlay);
 
-  // ── Result text (on overlayLayer, zIndex 10 so spin button stays on top) ───
+  // ── Result text ─────────────────────────────────────────────────────────────
   const resultText = new Text("", new TextStyle({
     fontSize: 48,
     fontWeight: "bold",
@@ -250,25 +266,20 @@ function buildSlotMachine() {
   resultText.zIndex = 10;
   overlayLayer.addChild(resultText);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SPIN BUTTON → overlayLayer (topmost layer)              │
-  // │ zIndex = 100 so it always renders above resultText      │
-  // └─────────────────────────────────────────────────────────┘
-
+  // ── Spin button ─────────────────────────────────────────────────────────────
   const SPIN_BTN_SIZE = 150;
-  const SPIN_BTN_HALF = SPIN_BTN_SIZE / 2; // 75
+  const SPIN_BTN_HALF = SPIN_BTN_SIZE / 2;
 
   const spinButton = new Sprite(spinTexture);
   spinButton.anchor.set(0.5);
   spinButton.width  = SPIN_BTN_SIZE;
   spinButton.height = SPIN_BTN_SIZE;
-  spinButton.x = 0;                         // centered (gameContainer coords)
-  spinButton.y = mask.y + frameHeight + 310; // below reels
+  spinButton.x = 0;
+  spinButton.y = mask.y + frameHeight + 310;
   spinButton.eventMode = "static";
   spinButton.cursor = "pointer";
   spinButton.zIndex = 100;
 
-  // Rounded mask for spin button
   const spinButtonMask = new Graphics();
   spinButtonMask.beginFill(0xffffff);
   spinButtonMask.drawRoundedRect(
@@ -285,7 +296,6 @@ function buildSlotMachine() {
   overlayLayer.addChild(spinButton);
   spinButton.mask = spinButtonMask;
 
-  // "SPIN" label centered on spin button
   const spinLabel = new Text("SPIN", new TextStyle({
     fontSize: 20,
     fontWeight: "bolder",
@@ -295,15 +305,12 @@ function buildSlotMachine() {
   spinLabel.anchor.set(0.5);
   spinLabel.x = spinButton.x;
   spinLabel.y = spinButton.y;
-  spinLabel.zIndex = 101; // above spinButton (zIndex 100)
+  spinLabel.zIndex = 101;
   overlayLayer.addChild(spinLabel);
 
   spinButton.mask = spinButtonMask;
 
-  // ============================================================
-  //  CONTROLS CONTAINER
-  //  x = 0 → centered because gameContainer.x = screenW / 2
-  // ============================================================
+  // ── Controls ─────────────────────────────────────────────────────────────────
   const controlsContainer = new Container();
   controlsContainer.x = 0;
   controlsContainer.y = mask.y + frameHeight + 20;
@@ -312,79 +319,52 @@ function buildSlotMachine() {
   const style   = new TextStyle({ fontSize: 20, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial" });
   const ROW_GAP = 55;
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SUB-CONTAINER 1 : Balance                               │
-  // └─────────────────────────────────────────────────────────┘
+  // Balance
   const balanceContainer = new Container();
   balanceContainer.x = -230;
   balanceContainer.y = 484;
   controlsContainer.addChild(balanceContainer);
 
-  // "BALANCE" label — smaller, dimmer
   const balanceLabel = new Text("BALANCE", new TextStyle({
-    fontSize: 14,
-    fontWeight: "bold",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
-    align: "left",
+    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "left",
   }));
   balanceLabel.anchor.set(0.5);
-  balanceLabel.x = 0;
-  balanceLabel.y = 0;
   balanceContainer.addChild(balanceLabel);
 
-  // Amount — larger, prominent
   const creditsText = new Text("1000.00", new TextStyle({
-    fontSize: 20,
-    fontWeight: "bold",
-    align: "left",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
+    fontSize: 20, fontWeight: "bold", align: "left", fill: 0xFDF1C0, fontFamily: "Arial",
   }));
   creditsText.anchor.set(0.5);
   creditsText.x = 0;
-  creditsText.y = 22; // below the label
+  creditsText.y = 22;
   balanceContainer.addChild(creditsText);
 
-  // SUB-CONTAINER 1A : TOTAL WIN
-
+  // Total win
   const totalWinContainer = new Container();
-  totalWinContainer.x = 230;   // right side — mirror of balanceContainer.x (-230)
-  totalWinContainer.y = 484;   // same y as balanceContainer
+  totalWinContainer.x = 230;
+  totalWinContainer.y = 484;
   controlsContainer.addChild(totalWinContainer);
 
   const totalWinLabel = new Text("TOTAL WIN", new TextStyle({
-    fontSize: 14,
-    fontWeight: "bold",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
-    align: "left",
+    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "left",
   }));
   totalWinLabel.anchor.set(0.5);
-  totalWinLabel.x = 0;
-  totalWinLabel.y = 0;
   totalWinContainer.addChild(totalWinLabel);
 
   const totalWinText = new Text("0.00", new TextStyle({
-    fontSize: 20,
-    fontWeight: "bold",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
+    fontSize: 20, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
   }));
   totalWinText.anchor.set(0.5);
   totalWinText.x = 0;
   totalWinText.y = 22;
   totalWinContainer.addChild(totalWinText);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SUB-CONTAINER 2 : Auto Spin + Stop Auto                 │
-  // └─────────────────────────────────────────────────────────┘
+  // Auto spin buttons
   const spinRowContainer = new Container();
   spinRowContainer.x = 0;
   spinRowContainer.y = ROW_GAP;
   controlsContainer.addChild(spinRowContainer);
 
-  // Auto Spin button
   const autoSpinButton = new Sprite(autoSpinPlay);
   autoSpinButton.eventMode = "static";
   autoSpinButton.cursor = "pointer";
@@ -392,7 +372,6 @@ function buildSlotMachine() {
   autoSpinButton.y = 97;
   spinRowContainer.addChild(autoSpinButton);
 
-  // Stop Auto Spin button (toggles with Auto Spin)
   const stopAutoSpinButton = new Sprite(autoSpinStop);
   stopAutoSpinButton.eventMode = "static";
   stopAutoSpinButton.cursor = "pointer";
@@ -401,44 +380,25 @@ function buildSlotMachine() {
   stopAutoSpinButton.y = autoSpinButton.y;
   spinRowContainer.addChild(stopAutoSpinButton);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SUB-CONTAINER 3 : Bet controls                          │
-  // │   ├── betText           →  Bet: 10                      │
-  // │   └── betBtnContainer                                   │
-  // │         ├── minusButton →  −                            │
-  // │         └── plusButton  →  +                            │
-  // └─────────────────────────────────────────────────────────┘
+  // Bet controls
   const betControlsContainer = new Container();
   betControlsContainer.x = 0;
   betControlsContainer.y = ROW_GAP * 3;
   controlsContainer.addChild(betControlsContainer);
 
-  //Bet Container
   const betContainer = new Container();
   betContainer.x = 0;
   betContainer.y = 155;
   controlsContainer.addChild(betContainer);
 
-  // Bet text (centered at x=0
   const betText = new Text("BET", new TextStyle({
-    fontSize: 14,
-    fontWeight: "bold",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
-    align: "center",
-  })
-  );
+    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "center",
+  }));
   betText.anchor.set(0.5);
-  betText.x = 0;
-  betText.y = 0;
   betContainer.addChild(betText);
 
   const amountLabel = new Text("10", new TextStyle({
-    fontSize: 20,
-    fontWeight: "bold",
-    align: "center",
-    fontFamily: "Arial",
-    fill: 0xFDF1C0,
+    fontSize: 20, fontWeight: "bold", align: "center", fontFamily: "Arial", fill: 0xFDF1C0,
   }));
   amountLabel.anchor.set(0.5);
   amountLabel.x = 0;
@@ -450,7 +410,6 @@ function buildSlotMachine() {
   totalBetContainer.y = -70;
   betControlsContainer.addChild(totalBetContainer);
 
-  // betBtnContainer holds − and + together, centered below betText
   const betBtnContainer = new Container();
   betBtnContainer.x = 0;
   betBtnContainer.y = 30;
@@ -458,13 +417,11 @@ function buildSlotMachine() {
 
   const BTN_SIZE    = 40;
   const BTN_SPACING = 250;
-  const btnTotalWidth = BTN_SIZE * 2 + BTN_SPACING;
 
-  // Minus button (left side)
   const minusButton = new Graphics();
   minusButton.eventMode = "static";
   minusButton.cursor = "pointer";
-  minusButton.beginFill(0xd4af37, 0); // black at 20% opacity
+  minusButton.beginFill(0xd4af37, 0);
   minusButton.drawRoundedRect(0, 0, BTN_SIZE, BTN_SIZE, 100);
   minusButton.endFill();
   minusButton.width = 75;
@@ -479,15 +436,14 @@ function buildSlotMachine() {
   minusText.y = BTN_SIZE / 2.4;
   minusButton.addChild(minusText);
 
-  // Plus button (right side)
   const plusButton = new Graphics();
   plusButton.eventMode = "static";
   plusButton.cursor = "pointer";
   plusButton.beginFill(0xd4af37, 0);
-  plusButton.drawRoundedRect(0, 0, BTN_SIZE, BTN_SIZE, 100); // radius 20 = diameter 40
+  plusButton.drawRoundedRect(0, 0, BTN_SIZE, BTN_SIZE, 100);
   plusButton.endFill();
-  plusButton.width  = 75;            // explicit 40
-  plusButton.height = 75;            // explicit 40
+  plusButton.width  = 75;
+  plusButton.height = 75;
   plusButton.x = 110;
   plusButton.y = 59;
   betBtnContainer.addChild(plusButton);
@@ -498,43 +454,37 @@ function buildSlotMachine() {
   plusText.y = BTN_SIZE / 2;
   plusButton.addChild(plusText);
 
-  // ┌─────────────────────────────────────────────────────────────────────────┐
-  // │ spinStatusContainer                                                     │
-  // │  ├── autoSpinText  →  "Auto spins: 10"  (hidden until auto spin starts) │
-  // │  └── freeSpinText  →  "Free spins: 10"  (hidden until bonus triggers)   │
-  // │  Both are centered at x=0. Only one should be visible at a time.        │
-  // └─────────────────────────────────────────────────────────────────────────┘
+  // Spin status (auto / free spin counters)
   const spinStatusContainer = new Container();
   spinStatusContainer.x = 0;
   spinStatusContainer.y = ROW_GAP * 4 + 30;
   controlsContainer.addChild(spinStatusContainer);
 
   const spinStatusStyle = new TextStyle({
-    fontSize: 20,
-    fontWeight: "bold",
-    fill: 0xFDF1C0,
-    fontFamily: "Arial",
+    fontSize: 20, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
   });
 
-  // Auto spin counter — shown only while auto spin is active
   const autoSpinText = new Text("AUTO SPINS: 0", spinStatusStyle);
   autoSpinText.anchor.set(0.5);
   autoSpinText.x = 0;
   autoSpinText.y = -155;
-  autoSpinText.visible = false;          // hidden until startAutoSpin()
+  autoSpinText.visible = false;
   spinStatusContainer.addChild(autoSpinText);
 
-  // Free spin counter — shown only during bonus free spins
   const freeSpinText = new Text("FREE SPINS LEFT: 0", spinStatusStyle);
   freeSpinText.anchor.set(0.5);
   freeSpinText.x = 0;
   freeSpinText.y = -155;
-  freeSpinText.visible = false;          // hidden until scatter bonus triggers
+  freeSpinText.visible = false;
   spinStatusContainer.addChild(freeSpinText);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ SUB-CONTAINER 5 : Quick bet buttons  10 / 50 / 100      │
-  // └─────────────────────────────────────────────────────────┘
+  // Quick bet buttons
+  const bgQuickBtnSprite = new Sprite(bgQuickBtn);
+  bgQuickBtnSprite.anchor.set(0.5);
+  bgQuickBtnSprite.x = 0;
+  bgQuickBtnSprite.y = ROW_GAP * 5 + 135;
+  controlsContainer.addChild(bgQuickBtnSprite);
+
   const quickBetContainer = new Container();
   quickBetContainer.x = 0;
   quickBetContainer.y = ROW_GAP * 5 + 135;
@@ -553,26 +503,15 @@ function buildSlotMachine() {
     btn.cursor = "pointer";
     btn.x = qStartX + idx * (QBTN_WIDTH + QBTN_GAP);
     btn.y = -QBTN_HEIGHT / 2;
-
-    // btn.beginFill(0xd4af37);
-    // btn.drawRoundedRect(0, 0, QBTN_WIDTH, QBTN_HEIGHT, 8);
-    // btn.endFill();
-
     const label = new Text(`${amount}`, { fontSize: 25, fontFamily: "Arial", fontWeight: "bold", fill: 0xFDF1C0 });
     label.anchor.set(0.5);
     label.x = QBTN_WIDTH / 2;
     label.y = QBTN_HEIGHT / 2;
     btn.addChild(label);
-
     btn.on("pointerdown", () => {
       if (gameController.getRunning()) return;
-
-      const currentBet = gameController.getBet(); // get current bet
-      let newBet = currentBet + amount;
-
-      // Clamp bet to maxBet
+      let newBet = gameController.getBet() + amount;
       if (newBet > MAX_BET) newBet = MAX_BET;
-
       gameController.setBet(newBet);
       gameController.updateBetDisplay();
     });
@@ -632,26 +571,19 @@ function buildSlotMachine() {
     autoSpinCount: AUTO_SPIN_COUNT,
   };
 
-  let currentBet = controllerConfig.initialBet;
-
-  function setBet(value: number) {
-    currentBet = Math.max(MIN_BET, Math.min(MAX_BET, value));
-    gameController.setBet(currentBet);
-    gameController.updateBetDisplay();
-  }
-
-  function addToBet(value: number) {
-    setBet(currentBet + value);
-  }
-
   gameController = new GameController(
     reels,
     controllerConfig,
     { creditsText, resultText, amountLabel, autoSpinText, freeSpinText, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
     highlightLayer,
+    winFloatLayer,         // ← pass the new layer
     tweenTo,
     backout
   );
+
+  // ── Tell GameController where the reel grid top-edge is ──────────────────────
+  // mask.y is the Y of the reel-grid top in gameContainer local space.
+  gameController.setReelBounds(mask.y, mask.x);
 
   gameController.onAutoSpinContinue = () => {
     setTimeout(() => {
@@ -678,7 +610,8 @@ function buildSlotMachine() {
       }
     }
     gameController.updateReelsVisuals();
-    gameController.updateHighlightAnimation(ticker.deltaTime);
+    // ↓ Pass BOTH deltaTime (for glow/float) and deltaMS (for win count-up)
+    gameController.updateHighlightAnimation(ticker.deltaTime, ticker.deltaMS);
   });
 
   console.log("Slot machine built.");
