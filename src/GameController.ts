@@ -136,6 +136,7 @@ export class GameController {
   private _balanceAtWinStart: number = 0;
 
   private backout: (amount: number) => (t: number) => number;
+  private readonly bounceOut: (t: number) => number = (t) => t;
 
   /**
    * Dedicated layer for floating win-symbol clones.
@@ -145,6 +146,8 @@ export class GameController {
 
   private pendingSliceGroups: number = 0;
   private pendingPayoutToShow: number | null = null;
+  private pendingBonusText: string = "";
+  private winDisplayFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Y coordinate (in gameContainer local space) that defines the TOP of the
@@ -186,7 +189,8 @@ export class GameController {
     highlightLayer: Container,
     winFloatLayer: Container,
     tweenTo: TweenToFn,
-    backoutEasing: (amount: number) => (t: number) => number
+    backoutEasing: (amount: number) => (t: number) => number,
+    bounceOutEasing: (t: number) => number
   ) {
     this.reels = reels;
     this.config = config;
@@ -202,12 +206,12 @@ export class GameController {
     this.ui.amountLabel.text = this.bet.toFixed(2);
     this.ui.totalWinText.text = "0.00";
     this.ui.dimOverlay.visible = false;
+    this.bounceOut = bounceOutEasing;
 
     // ── Total Win count-up ────────────────────────────────────────────────
-    // Drives the "WIN: x.xx" result text and totalWinText simultaneously.
+    // Drives the "WIN: x.xx" result text (center). totalWinText is set directly in _showWinAmount.
     this.winCounter = new WinCountUp((displayValue, isDone) => {
       const formatted = displayValue.toFixed(2);
-      this.ui.totalWinText.text = formatted;
       if (this.ui.resultText.text.startsWith("WIN: ")) {
         const hasBonus = this.ui.resultText.text.includes("|");
         const suffix   = hasBonus
@@ -338,20 +342,28 @@ export class GameController {
       const len = reel.strip.length;
       const base = Math.floor(reel.position);
       const baseMod = ((base % len) + len) % len;
-      const delta = ((targetTopIndex - baseMod) + len) % len;
+      const delta = ((baseMod - targetTopIndex) + len) % len;
       const minSpins = 3;
       const spins = minSpins + i;
-      const target = reel.position + spins * len + delta;
-      const time = 1100 + i * 360 + Math.floor(Math.random() * 300);
+      // Ensure the reel always stops on an exact symbol boundary (integer position)
+      // so that exactly three symbols are fully visible when the spin ends.
+      const target = base - spins * len - delta;
+      const time = 1150 + i * 360 + Math.floor(Math.random() * 100);
 
       this.tweenTo(
         reel,
         "position",
         target,
         time,
-        this.backout(0.6),
+        // Strictly downward spin with no bounce / rebound:
+        // use a simple linear easing for the reel motion itself.
+        (t: number) => t,
         undefined,
         () => {
+          // Per‑reel settle bounce: each reel squashes when *it* stops,
+          // using its own timing, independent of other reels.
+          this._playSettleBounceOnReel(reel);
+
           completed++;
           if (completed === reelsCount) {
             this.running = false;
@@ -363,6 +375,46 @@ export class GameController {
         }
       );
     }
+  }
+
+  /**
+   * Subtle squash-and-stretch for a single reel's visible symbols when that
+   * reel settles. Each reel calls this independently in its own tween
+   * completion callback so timing stays per‑reel.
+   */
+  private _playSettleBounceOnReel(reel: Reel): void {
+    const rows = this.config.symbolsPerReel;
+    const bottomRowIndex = rows - 1;
+    const squashY = 0.96;
+    const durationDown = 110;
+    const durationUp = 230;
+
+    const cell = reel.getContainerAt(bottomRowIndex);
+    if (!cell) return;
+
+    // start from neutral scale
+    cell.scale.set(1, 1);
+
+    // first, a quick squash on Y only (no X stretch)
+    this.tweenTo(
+      cell.scale,
+      "y",
+      squashY,
+      durationDown,
+      (t) => t,
+      undefined,
+      () => {
+        // then ease back towards 1 with a soft bounce, only on the bottom symbol
+        this.tweenTo(
+          cell.scale,
+          "y",
+          1,
+          durationUp,
+          (t) => this.bounceOut(t),
+          undefined
+        );
+      }
+    );
   }
 
   getVisibleMatrix(): number[][] {
@@ -415,25 +467,40 @@ export class GameController {
 
   /** Animate and reveal the Win: [amount] UI once slicing finished. */
   private _showWinAmount(amount: number): void {
-    // Prepare text
-    this.ui.resultText.text = `WIN: ${amount.toFixed(2)}`;
+    if (this.winDisplayFallbackTimer !== null) {
+      clearTimeout(this.winDisplayFallbackTimer);
+      this.winDisplayFallbackTimer = null;
+    }
+
+    // TOTAL WIN (right panel): show amount immediately so it always displays
+    this.ui.totalWinText.text = amount.toFixed(2);
+    this.ui.totalWinText.alpha = 1;
+    this.ui.totalWinText.visible = true;
+
+    this.ui.resultText.text = `WIN: 0.00${this.pendingBonusText}`;
+    console.log("pendingBonusText: " + this.pendingBonusText);
     this.ui.resultText.alpha = 0;
     this.ui.resultText.scale.set(0.65, 0.65);
     this.ui.resultText.visible = true;
 
-    // pop + fade in using your tweenTo system
-    // scale.x -> 1, scale.y mirrored via onchange
+    this.winCounter.start(amount);
+    this.balanceCounter.start(amount);
+
     this.tweenTo(
       this.ui.resultText.scale,
       "x",
       1,
-      420,
-      this.backout(1.7),
-      (t) => { this.ui.resultText.scale.y = this.ui.resultText.scale.x; }
+      450,
+      this.backout(1.4),
+      () => { this.ui.resultText.scale.y = this.ui.resultText.scale.x; }
     );
-    // alpha
-    this.tweenTo(this.ui.resultText, "alpha", 1, 300, (t) => t);
-    // optional: after fully visible, apply a gentle glow pulse (done in ticker by win highlights)
+    this.tweenTo(
+      this.ui.resultText,
+      "alpha",
+      1,
+      320,
+      (t) => 1 - Math.pow(1 - t, 2) // easeOutQuad for smoother fade-in
+    );
   }
 
     /**
@@ -441,97 +508,95 @@ export class GameController {
    * animate pieces outward / rotate / fade, then cleanup.
    */
   private _sliceCloneIntoQuadrants(clone: Sprite, entry: WinningCellEntry): void {
-    // remove the intact clone immediately (no intact symbol should remain)
     if (clone.parent) {
       this.winFloatLayer.removeChild(clone);
     }
     const texture = clone.texture;
-    // Determine the original texture pixel size (use .orig which is stable)
-    const texW = texture.orig?.width ?? texture.width;
-    const texH = texture.orig?.height ?? texture.height;
+    const texW = texture.width;
+    const texH = texture.height;
 
-    // screen display size after scale
     const dispW = texW * clone.scale.x;
     const dispH = texH * clone.scale.y;
 
-    // Quadrant center offsets from the clone center (display-space)
     const offsets = [
-      { dx: -dispW * 0.25, dy: -dispH * 0.25 }, // top-left
-      { dx:  dispW * 0.25, dy: -dispH * 0.25 }, // top-right
-      { dx: -dispW * 0.25, dy:  dispH * 0.25 }, // bottom-left
-      { dx:  dispW * 0.25, dy:  dispH * 0.25 }, // bottom-right
+      { dx: -dispW * 0.25, dy: -dispH * 0.25 },
+      { dx:  dispW * 0.25, dy: -dispH * 0.25 },
+      { dx: -dispW * 0.25, dy:  dispH * 0.25 },
+      { dx:  dispW * 0.25, dy:  dispH * 0.25 },
     ];
 
-    // Create four textures that crop the original into quadrants
-    const base = texture.baseTexture;
     const halfW = Math.floor(texW / 2);
     const halfH = Math.floor(texH / 2);
 
+    const frame = texture.frame ?? { x: 0, y: 0 };
+    const fx = typeof frame.x === "number" ? frame.x : 0;
+    const fy = typeof frame.y === "number" ? frame.y : 0;
+
     const rects = [
-      new Rectangle(0,         0,         halfW, halfH), // TL
-      new Rectangle(halfW,     0,         texW - halfW, halfH), // TR
-      new Rectangle(0,         halfH,     halfW, texH - halfH), // BL
-      new Rectangle(halfW,     halfH,     texW - halfW, texH - halfH), // BR
+      new Rectangle(fx,           fy,           halfW,        halfH),
+      new Rectangle(fx + halfW,   fy,           texW - halfW, halfH),
+      new Rectangle(fx,           fy + halfH,   halfW,        texH - halfH),
+      new Rectangle(fx + halfW,   fy + halfH,   texW - halfW, texH - halfH),
     ];
 
     const pieces: Sprite[] = [];
+    const source = (texture as { source?: unknown }).source ?? (texture as { baseTexture?: unknown }).baseTexture;
 
-    for (let i = 0; i < 4; i++) {
-      const tex = new Texture(base);
-      const piece = new Sprite(tex);
-      piece.anchor.set(0.5);
-      // place at clone center plus quadrant offset
-      piece.x = clone.x + offsets[i].dx;
-      piece.y = clone.y + offsets[i].dy;
-      // match scale so the pieces line-up visually
-      piece.scale.set(clone.scale.x, clone.scale.y);
-      this.winFloatLayer.addChild(piece);
-      pieces.push(piece);
+    try {
+      for (let i = 0; i < 4; i++) {
+        const tex = source
+          ? new Texture({ source, frame: rects[i] } as ConstructorParameters<typeof Texture>[0])
+          : new Texture(texture);
+        const piece = new Sprite(tex);
+        piece.anchor.set(0.5);
+        piece.x = clone.x + offsets[i].dx;
+        piece.y = clone.y + offsets[i].dy;
+        piece.scale.set(clone.scale.x, clone.scale.y);
+        this.winFloatLayer.addChild(piece);
+        pieces.push(piece);
+      }
+    } catch (_e) {
+      // If quadrant textures fail (e.g. API mismatch), still complete so win can show
+      clone.destroy();
+      this.reels[entry.reelIndex].restoreCell(entry.cell);
+      entry.cell.alpha = 1;
+      this._onSliceGroupComplete();
+      return;
     }
 
-    // Animate the 4 pieces outward + rotate + fade
-    // We'll track piece completion and cleanup once all finished.
+    clone.destroy();
+
     let piecesCompleted = 0;
-    const pieceAnimTime = 520; // ms
+    const pieceAnimTime = 520;
     for (let i = 0; i < pieces.length; i++) {
       const p = pieces[i];
-      // outward displacement vector (based on offset's sign)
       const dirX = Math.sign(offsets[i].dx) || (i % 2 === 0 ? -1 : 1);
       const dirY = Math.sign(offsets[i].dy) || (i < 2 ? -1 : 1);
 
       const targetX = p.x + dirX * (dispW * 0.45 + Math.random() * 18);
       const targetY = p.y + dirY * (dispH * 0.35 + Math.random() * 18);
-      const targetRotation = (Math.random() * 0.6 - 0.3) * (Math.PI); // rotate between -0.3π .. 0.3π
-      const targetAlpha = 0;
+      const targetRotation = (Math.random() * 0.6 - 0.3) * Math.PI;
 
-      // animate x
       this.tweenTo(p, "x", targetX, pieceAnimTime, this._easeOutCubic);
-      // animate y
       this.tweenTo(p, "y", targetY, pieceAnimTime, this._easeOutCubic);
-      // animate rotation
       this.tweenTo(p, "rotation", targetRotation, pieceAnimTime, this._easeOutCubic);
-      // animate alpha and call completion when alpha finishes
       this.tweenTo(
         p,
         "alpha",
-        targetAlpha,
+        0,
         pieceAnimTime,
         this._easeOutCubic,
         undefined,
         () => {
-          // piece done
           if (p.parent) p.parent.removeChild(p);
-          p.destroy({ texture: true, baseTexture: false });
+          p.destroy({ texture: true, textureSource: false });
           piecesCompleted++;
           if (piecesCompleted === pieces.length) {
-            // restore the original reel cell now that the slice group finished
             const reel = this.reels[entry.reelIndex];
             const cell = entry.cell;
             reel.restoreCell(cell);
-            // ensure the original cell is visible again (if you prefer blank leave it hidden)
             cell.alpha = 1;
 
-            // Signal that one slice group finished
             this._onSliceGroupComplete();
           }
         }
@@ -548,10 +613,18 @@ export class GameController {
    * One clone per unique (reelIndex, rowIndex) winning position.
    */
   private _spawnFloatingWinSymbols(): void {
-    if (this.winningEntries.length === 0) return;
+    if (this.winningEntries.length === 0) {
+      // No symbols to animate — show win immediately
+      if (this.pendingPayoutToShow !== null) {
+        const amount = this.pendingPayoutToShow;
+        this.pendingPayoutToShow = null;
+        this.pendingSliceGroups = 0;
+        this._showWinAmount(amount);
+      }
+      return;
+    }
 
-    const { reelWidth, symbolSize } = this.config;
-    const now = Date.now();
+    const { symbolSize } = this.config;
 
     // Deduplicate: one clone per (reelIndex, rowIndex) pair
     const seen = new Set<string>();
@@ -610,6 +683,19 @@ export class GameController {
 
     // track how many slice groups we expect — used to show win after all done
     this.pendingSliceGroups = spawned.length;
+
+    // Fallback: if slice completion callbacks never fire, show win after max animation time
+    const pieceAnimTime = 520;
+    const maxWait = GameController.RISE_DURATION + pieceAnimTime + 400;
+    this.winDisplayFallbackTimer = setTimeout(() => {
+      this.winDisplayFallbackTimer = null;
+      if (this.pendingPayoutToShow !== null) {
+        const amount = this.pendingPayoutToShow;
+        this.pendingPayoutToShow = null;
+        this.pendingSliceGroups = 0;
+        this._showWinAmount(amount);
+      }
+    }, maxWait);
   }
 
   private _gameYToLayerY(gameY: number): number {
@@ -769,7 +855,25 @@ export class GameController {
   clearHighlights(): void {
     this._clearFloatingSymbols();
 
+    // Remove any in-flight clone / piece sprites from the float layer
+    while (this.winFloatLayer.children.length > 0) {
+      const child = this.winFloatLayer.children[0];
+      this.winFloatLayer.removeChild(child);
+      child.destroy();
+    }
+
+    // Reset pending slice / payout state so stale callbacks are ignored
+    this.pendingSliceGroups   = 0;
+    this.pendingPayoutToShow  = null;
+    this.pendingBonusText     = "";
+    if (this.winDisplayFallbackTimer !== null) {
+      clearTimeout(this.winDisplayFallbackTimer);
+      this.winDisplayFallbackTimer = null;
+    }
+
+    // Restore all suspended cells so reels update them normally again
     this.reels.forEach((reel) => {
+      reel.clearAllSuspensions();
       reel.symbolCells.forEach((cell) => {
         cell.alpha = 1;
       });
@@ -873,37 +977,23 @@ export class GameController {
     // STEP 7: Show/hide dimOverlay based on whether there are winning symbols
     this.ui.dimOverlay.visible = this.winningCells.size > 0;
 
-    // STEP 8: Credit update + animated displays
+    // STEP 8: Credit update (counters deferred until slice animation completes)
     if (totalPayout > 0) {
-      // Snapshot the balance BEFORE adding the win — this is the count-up start.
       this._balanceAtWinStart = this.credits;
-
-      // addCredits() updates this.credits internally but does NOT touch the UI.
       this.addCredits(totalPayout);
 
-      // totalWinText + resultText: count up from 0 → totalPayout
-      this.winCounter.start(totalPayout);
-
-      // creditsText: count up from pre-win balance → post-win balance.
-      this.balanceCounter.start(totalPayout);
-
-      // Defer showing the final rewarded "WIN: amount" until after slicing.
-      // Save payout; when pending slice groups reach 0 we will reveal it.
       this.pendingPayoutToShow = totalPayout;
+      this.pendingBonusText = spinsWonThisSpin > 0
+        ? ` | BONUS! ${spinsWonThisSpin} Free Spins!`
+        : "";
 
-      // Set a placeholder so UI doesn't show the wrong final number
-      this.ui.resultText.text = spinsWonThisSpin > 0
-        ? `WIN: 0.00 | BONUS! ${spinsWonThisSpin} Free Spins!`
-        : "WIN: 0.00";
+      this.ui.resultText.text = "";
       this.ui.totalWinText.text = "0.00";
     }
 
-    // STEP 9: Result text
+    // STEP 9: Result text (win text deferred to _showWinAmount after slicing)
     if (totalPayout > 0) {
-      this.ui.resultText.text   = spinsWonThisSpin > 0
-        ? `WIN: 0.00 | BONUS! ${spinsWonThisSpin} Free Spins!`
-        : "WIN: 0.00";
-      this.ui.totalWinText.text = "0.00";
+      // handled by _showWinAmount after slice animation completes
     } else if (spinsWonThisSpin > 0) {
       this.ui.resultText.text   = `BONUS! ${spinsWonThisSpin} Free Spins!`;
       this.ui.totalWinText.text = "0.00";

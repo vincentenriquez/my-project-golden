@@ -84,6 +84,11 @@ export class Reel {
     this.suspendedCells.delete(cell);
   }
 
+  /** Restore ALL suspended cells at once (used when clearing win highlights mid-animation). */
+  clearAllSuspensions(): void {
+    this.suspendedCells.clear();
+  }
+
   // ── Existing API (unchanged) ──────────────────────────────────────────────
 
   /** Returns the SymbolCell container at a visible row. Used by GameController for glow. */

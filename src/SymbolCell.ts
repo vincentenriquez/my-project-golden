@@ -52,10 +52,10 @@ export class SymbolCell extends Container {
   public  readonly background:  Graphics;
 
   private readonly raysGraphics: Graphics;
-  private readonly circleGlow:   Graphics;
+  // private readonly circleGlow:   Graphics;
   private readonly innerBloom:   Graphics;
   private readonly rimCircle:    Graphics;
-  private readonly circleMask:   Graphics;
+  // private readonly circleMask:   Graphics;
 
   public  symbolId: number = -1;
 
@@ -106,9 +106,9 @@ export class SymbolCell extends Container {
     this.addChild(this.raysGraphics);
 
     // ── 3. Circle glow bloom (behind sprite) ──────────────────────────────
-    this.circleGlow         = new Graphics();
-    this.circleGlow.visible = false;
-    this.addChild(this.circleGlow);
+    // this.circleGlow         = new Graphics();
+    // this.circleGlow.visible = false;
+    // this.addChild(this.circleGlow);
 
     // ── 4. Symbol sprite, clipped to spriteR ──────────────────────────────
     this.sprite        = new Sprite(texture);
@@ -118,12 +118,12 @@ export class SymbolCell extends Container {
     this._fitSprite();
     this.addChild(this.sprite);
 
-    this.circleMask = new Graphics();
-    this.circleMask.beginFill(0xffffff);
-    this.circleMask.drawCircle(this.cx, this.cy, this.spriteR);
-    this.circleMask.endFill();
-    this.addChild(this.circleMask);
-    this.sprite.mask = this.circleMask;
+    // this.circleMask = new Graphics();
+    // this.circleMask.beginFill(0xffffff);
+    // this.circleMask.drawCircle(this.cx, this.cy, this.spriteR);
+    // this.circleMask.endFill();
+    // this.addChild(this.circleMask);
+    // this.sprite.mask = this.circleMask;
 
     // ── 5. Inner bloom (above sprite — very subtle warm tint) ─────────────
     this.innerBloom         = new Graphics();
@@ -157,7 +157,7 @@ export class SymbolCell extends Container {
     const pa    = a * pulse;
 
     this.raysGraphics.visible = true;
-    this.circleGlow.visible   = true;
+    // this.circleGlow.visible   = true;
     this.innerBloom.visible   = true;
     this.rimCircle.visible    = true;
     this.rimCircle.alpha      = pa;
@@ -170,11 +170,11 @@ export class SymbolCell extends Container {
   hideGlow(): void {
     this.glowActive           = false;
     this.raysGraphics.visible = false;
-    this.circleGlow.visible   = false;
+    // this.circleGlow.visible   = false;
     this.innerBloom.visible   = false;
     this.rimCircle.visible    = false;
     this.raysGraphics.clear();
-    this.circleGlow.clear();
+    // this.circleGlow.clear();
     this.innerBloom.clear();
     this.pulsePhase = 0;
     this.rayAngle   = 0;
@@ -272,9 +272,9 @@ export class SymbolCell extends Container {
    * never covered strongly (inner layers stay below 15% opacity).
    */
   private _drawCircleGlow(pa: number): void {
-    const g  = this.circleGlow;
-    g.clear();
-    g.lineStyle(0);
+    // const g  = this.circleGlow;
+    // g.clear();
+    // g.lineStyle(0);
 
     const cx = this.cx;
     const cy = this.cy;
@@ -294,9 +294,9 @@ export class SymbolCell extends Container {
 
     for (const [r, color, opacity] of layers) {
       if (r <= 0) continue;
-      g.beginFill(color, opacity * pa);
-      g.drawCircle(cx, cy, r);
-      g.endFill();
+      // g.beginFill(color, opacity * pa);
+      // g.drawCircle(cx, cy, r);
+      // g.endFill();
     }
   }
 

@@ -116,6 +116,21 @@ function backout(amount: number): (t: number) => number {
   return (t: number) => --t * t * ((amount + 1) * t + amount) + 1;
 }
 
+// Add this alongside your existing backout() function
+function bounceOut(t: number): number {
+  const n1 = 7.5625;
+  const d1 = 2.75;
+  if (t < 1 / d1) {
+    return n1 * t * t;
+  } else if (t < 2 / d1) {
+    return n1 * (t -= 1.5 / d1) * t + 0.75;
+  } else if (t < 2.5 / d1) {
+    return n1 * (t -= 2.25 / d1) * t + 0.9375;
+  } else {
+    return n1 * (t -= 2.625 / d1) * t + 0.984375;
+  }
+}
+
 function tweenTo(
   object: unknown,
   property: string,
@@ -578,7 +593,8 @@ function buildSlotMachine() {
     highlightLayer,
     winFloatLayer,         // ← pass the new layer
     tweenTo,
-    backout
+    backout,
+    bounceOut
   );
 
   // ── Tell GameController where the reel grid top-edge is ──────────────────────
@@ -600,12 +616,27 @@ function buildSlotMachine() {
     const now = Date.now();
     for (let i = tweening.length - 1; i >= 0; i--) {
       const t = tweening[i];
+      const obj = t.object as Record<string, number> | null | undefined;
+      const destroyed = (obj as unknown as { destroyed?: boolean }).destroyed;
+      if (obj == null || (typeof destroyed === "boolean" && destroyed)) {
+        tweening.splice(i, 1);
+        continue;
+      }
       const phase = Math.min(1, (now - t.start) / t.time);
-      (t.object as Record<string, number>)[t.property] =
-        t.propertyBeginValue + (t.target - t.propertyBeginValue) * t.easing(phase);
+      try {
+        obj[t.property] = t.propertyBeginValue + (t.target - t.propertyBeginValue) * t.easing(phase);
+      } catch {
+        tweening.splice(i, 1);
+        continue;
+      }
+      if (t.change) t.change(t);
       if (phase === 1) {
-        (t.object as Record<string, number>)[t.property] = t.target;
-        if (t.complete) t.complete(t);
+        try {
+          obj[t.property] = t.target;
+          if (t.complete) t.complete(t);
+        } catch {
+          // object may have been destroyed in change callback
+        }
         tweening.splice(i, 1);
       }
     }
