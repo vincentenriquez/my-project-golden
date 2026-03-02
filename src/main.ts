@@ -17,13 +17,13 @@ import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
 const REEL_WIDTH = 155;
-const SYMBOL_SIZE = 99;
+const SYMBOL_SIZE = 100;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
-const REEL_STRIP_LENGTH = 15;
+const REEL_STRIP_LENGTH = 14;
 const BG_IMAGE = "bgg1.jpg";
 const MIN_BET = 10;
-const MAX_BET = 1000;
+const MAX_BET = 1000000;
 const AUTO_SPIN_COUNT = 10;
 
 // ---------- PIXI App ----------
@@ -294,6 +294,10 @@ function buildSlotMachine() {
   spinButton.eventMode = "static";
   spinButton.cursor = "pointer";
   spinButton.zIndex = 100;
+
+  app.ticker.add((delta) => {
+    spinButton.rotation += 0.01;
+  })
 
   const spinButtonMask = new Graphics();
   spinButtonMask.beginFill(0xffffff);

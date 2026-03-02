@@ -102,6 +102,7 @@ export class Reel {
   }
 
   setTextures(textures: Texture[]): void { this.textures = textures; }
+  getTexture(symbolId: number): Texture { return this.textures[symbolId]; }
   setVisualOverride(row: number, symbolId: number): void { this.visualOverrides.set(row, symbolId); }
   clearVisualOverrides(): void { this.visualOverrides.clear(); }
 

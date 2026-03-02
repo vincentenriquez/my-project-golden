@@ -14,7 +14,7 @@ export const SYMBOL_ASSETS = [
   "/mangoSlice.png",
   "/orangeSlice.png",
   "/wild.png",
-  "/scatter.png",
+  "/image_20-removebg-preview.png",
 ];
 
 export const TOTAL_SYMBOLS = 10;

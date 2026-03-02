@@ -168,6 +168,8 @@ export class GameController {
   private winningEntries: WinningCellEntry[] = [];
   private winningCells: Set<SymbolCell> = new Set();
   private pulseTime = 0;
+  private glowPhase: "pulsing" | "fading" | "done" = "done";
+  private glowFadeStart = 0;
 
   /** Active floating clones for the current win */
   private floatingSymbols: FloatingWinSymbol[] = [];
@@ -181,6 +183,12 @@ export class GameController {
   private static readonly HOLD_DURATION = 900;
   /** Fade-out duration (ms) */
   private static readonly FADE_DURATION = 320;
+  /** How long the glow pulses before fading (ms) */
+  private static readonly GLOW_SHOW_DURATION = 800;
+  /** Duration of the glow fade-out (ms) */
+  private static readonly GLOW_FADE_DURATION = 280;
+  /** Delay after win display before cascade starts (ms) */
+  private static readonly CASCADE_WIN_DELAY = 0;
 
   constructor(
     reels: Reel[],
@@ -432,26 +440,31 @@ export class GameController {
   updateReelsVisuals(): void { this.reels.forEach((r) => r.updateSprites()); }
 
   /**
-   * Main animation ticker — drives glow pulses, float-up win animation,
-   * the Total Win count-up, AND the Balance count-up.
+   * Main animation ticker — drives glow pulses (with fade phase),
+   * float-up win animation, the Total Win count-up, AND the Balance count-up.
    */
   updateHighlightAnimation(deltaTime: number, deltaMS: number = 16.67): void {
-    // Glow pulse
-    if (this.winningCells.size > 0) {
+    if (this.glowPhase === "fading") {
+      const elapsed = Date.now() - this.glowFadeStart;
+      const t = Math.min(1, elapsed / GameController.GLOW_FADE_DURATION);
+      const fadeAlpha = 1 - t;
+      this.winningCells.forEach((cell) => cell.showGlow(fadeAlpha, 0));
+      if (t >= 1) {
+        this.glowPhase = "done";
+        this.winningCells.forEach((cell) => {
+          cell.hideGlow();
+          cell.detachRaysFromExternalLayer();
+        });
+        this._spawnFloatingWinSymbols();
+      }
+    } else if (this.glowPhase === "pulsing" && this.winningCells.size > 0) {
       this.pulseTime += deltaTime * 0.05;
       const ringAlpha = 0.75 + Math.sin(this.pulseTime) * 0.25;
-      this.winningCells.forEach((cell) => {
-        cell.showGlow(ringAlpha, deltaTime);
-      });
+      this.winningCells.forEach((cell) => cell.showGlow(ringAlpha, deltaTime));
     }
 
-    // Both count-up animators share the same deltaMS tick.
-    // WinCountUp.update() is a no-op when not active, so there is zero
-    // overhead when nothing is animating.
     this.winCounter.update(deltaMS);
     this.balanceCounter.update(deltaMS);
-
-    // Float-up animation
     this._updateFloatingSymbols();
   }
 
@@ -501,6 +514,11 @@ export class GameController {
       320,
       (t) => 1 - Math.pow(1 - t, 2) // easeOutQuad for smoother fade-in
     );
+
+    setTimeout(() => {
+      if (this.winningEntries.length === 0) return;
+      this._cascadeSymbols();
+    }, GameController.CASCADE_WIN_DELAY);
   }
 
     /**
@@ -556,10 +574,7 @@ export class GameController {
         pieces.push(piece);
       }
     } catch (_e) {
-      // If quadrant textures fail (e.g. API mismatch), still complete so win can show
       clone.destroy();
-      this.reels[entry.reelIndex].restoreCell(entry.cell);
-      entry.cell.alpha = 1;
       this._onSliceGroupComplete();
       return;
     }
@@ -592,11 +607,6 @@ export class GameController {
           p.destroy({ texture: true, textureSource: false });
           piecesCompleted++;
           if (piecesCompleted === pieces.length) {
-            const reel = this.reels[entry.reelIndex];
-            const cell = entry.cell;
-            reel.restoreCell(cell);
-            cell.alpha = 1;
-
             this._onSliceGroupComplete();
           }
         }
@@ -778,6 +788,7 @@ export class GameController {
     if (!cell || this.winningCells.has(cell)) return;
     this.winningEntries.push({ cell, reelIndex, rowIndex });
     this.winningCells.add(cell);
+    cell.attachRaysToExternalLayer(this.highlightLayer);
     cell.showGlow(1.0, 0);
   }
 
@@ -790,6 +801,7 @@ export class GameController {
 
     for (let symbol = 0; symbol < TOTAL_SYMBOLS; symbol++) {
       if (symbol === SCATTER_SYMBOL_ID) continue;
+      if (symbol === WILD_SYMBOL_ID) continue;
 
       let consecutiveReels = 0;
       let combos = 1;
@@ -853,6 +865,7 @@ export class GameController {
   }
 
   clearHighlights(): void {
+    this.glowPhase = "done";
     this._clearFloatingSymbols();
 
     // Remove any in-flight clone / piece sprites from the float layer
@@ -879,7 +892,10 @@ export class GameController {
       });
     });
 
-    this.winningCells.forEach((cell) => cell.hideGlow());
+    this.winningCells.forEach((cell) => {
+      cell.detachRaysFromExternalLayer();
+      cell.hideGlow();
+    });
 
     this.winningEntries        = [];
     this.winningCells.clear();
@@ -924,8 +940,11 @@ export class GameController {
       }
     }
 
-    // STEP 5: Sum all ways wins + register winning symbol sprites
+    // STEP 5: Sum all ways wins + register winning symbol sprites.
+    // Wild cells in a winning chain resolve visually to the highest-paying
+    // base symbol they substitute for (one override per cell position).
     let totalPayout = 0;
+    const wildOverrides = new Map<string, { symbol: number; payout: number }>();
     waysResults.forEach((win) => {
       totalPayout += win.payout;
       for (let r = 0; r < win.hits; r++) {
@@ -933,10 +952,23 @@ export class GameController {
           const cell = expandedMatrix[row][r];
           if (cell === win.symbol || cell === WILD_SYMBOL_ID) {
             this._markCellAt(r, row);
+            if (cell === WILD_SYMBOL_ID) {
+              const key = `${r}_${row}`;
+              const prev = wildOverrides.get(key);
+              if (!prev || win.payout > prev.payout) {
+                wildOverrides.set(key, { symbol: win.symbol, payout: win.payout });
+              }
+            }
           }
         }
       }
     });
+
+    for (const [key, { symbol: resolvedSym }] of wildOverrides) {
+      const [ri, ro] = key.split("_");
+      this.reels[parseInt(ri)].setVisualOverride(parseInt(ro), resolvedSym);
+    }
+    if (wildOverrides.size > 0) this.updateReelsVisuals();
 
     // STEP 6: Scatter payout + free spins trigger
     let spinsWonThisSpin = 0;
@@ -1006,22 +1038,33 @@ export class GameController {
       this.balanceCounter.cancel();
     }
 
-    // STEP 10: Spawn floating win symbols after a brief delay
+    // STEP 10: Start phased win animation (glow → fade → rise → slice → win → cascade)
     if (this.winningCells.size > 0) {
-      setTimeout(() => {
-        this._spawnFloatingWinSymbols();
-      }, 180);
+      this.glowPhase = "pulsing";
 
       this.reels.forEach((reel) => {
         reel.symbolCells.forEach((cell) => {
-          if (!this.winningCells.has(cell)) {
-            cell.alpha = 0.25;
-          }
+          if (!this.winningCells.has(cell)) cell.alpha = 0.25;
         });
       });
+
+      setTimeout(() => {
+        if (this.glowPhase !== "pulsing") return;
+        this.glowPhase = "fading";
+        this.glowFadeStart = Date.now();
+      }, GameController.GLOW_SHOW_DURATION);
+
+      return;
     }
 
-    // ── Free spins continuation ─────────────────────────────────────────────
+    this._resolveSpinContinuation();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Spin continuation (free spins / auto spins)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private _resolveSpinContinuation(): void {
     if (this.inFreeSpins) {
       if (this.freeSpinsRemaining > 0) {
         this.freeSpinsRemaining--;
@@ -1029,7 +1072,7 @@ export class GameController {
         setTimeout(() => {
           const result = this.generateResult({ weighted: true });
           this.spinToResult(result);
-        }, 1500);
+        }, 400);
       } else {
         this.inFreeSpins = false;
         this.ui.freeSpinText.visible = false;
@@ -1042,7 +1085,6 @@ export class GameController {
       return;
     }
 
-    // Auto spin continuation
     if (this.autoSpinActive) {
       this.autoSpinsRemaining--;
       this.ui.autoSpinText.text = `AUTO SPINS: ${this.autoSpinsRemaining}`;
@@ -1052,6 +1094,126 @@ export class GameController {
       }
       if (this.onAutoSpinContinue) this.onAutoSpinContinue();
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cascade: remaining symbols drop to fill gaps left by removed winners
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private _cascadeSymbols(): void {
+    const { reelsCount, symbolsPerReel, symbolSize } = this.config;
+
+    this.ui.dimOverlay.visible = false;
+
+    const emptyMap = new Map<number, Set<number>>();
+    const seen = new Set<string>();
+    for (const entry of this.winningEntries) {
+      const key = `${entry.reelIndex}_${entry.rowIndex}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!emptyMap.has(entry.reelIndex)) emptyMap.set(entry.reelIndex, new Set());
+      emptyMap.get(entry.reelIndex)!.add(entry.rowIndex);
+    }
+
+    let totalTweens = 0;
+    let doneTweens = 0;
+    const onDone = () => {
+      doneTweens++;
+      if (doneTweens >= totalTweens) this._finishCascade();
+    };
+
+    for (let ri = 0; ri < reelsCount; ri++) {
+      const empty = emptyMap.get(ri);
+      if (!empty || empty.size === 0) {
+        this.reels[ri].symbolCells.forEach((c) => { c.alpha = 1; });
+        continue;
+      }
+
+      const reel = this.reels[ri];
+      const currentSymbols = reel.getVisibleSymbols();
+
+      const survivors: { sym: number; fromRow: number }[] = [];
+      for (let row = 0; row < symbolsPerReel; row++) {
+        if (!empty.has(row)) survivors.push({ sym: currentSymbols[row], fromRow: row });
+      }
+
+      const numEmpty = empty.size;
+      const newSyms: number[] = [];
+      for (let i = 0; i < numEmpty; i++) newSyms.push(getWeightedRandomSymbol());
+
+      const newColumn = [...newSyms, ...survivors.map((s) => s.sym)];
+
+      const len = reel.strip.length;
+      const top = Math.floor(reel.position) % len;
+      const normTop = ((top % len) + len) % len;
+      for (let row = 0; row < symbolsPerReel; row++) {
+        reel.strip[(normTop + row) % len] = newColumn[row];
+      }
+      reel.clearVisualOverrides();
+
+      for (let row = 0; row < symbolsPerReel; row++) {
+        const cell = reel.symbolCells[row];
+        reel.suspendCell(cell);
+
+        const newSym = newColumn[row];
+        const tex = reel.getTexture(newSym);
+        if (tex) cell.setTexture(tex, newSym);
+        cell.alpha = 1;
+        cell.hideGlow();
+        cell.detachRaysFromExternalLayer();
+
+        let fromY: number;
+        if (row < numEmpty) {
+          fromY = -(numEmpty - row) * symbolSize;
+        } else {
+          fromY = survivors[row - numEmpty].fromRow * symbolSize;
+        }
+
+        const toY = row * symbolSize;
+
+        if (Math.abs(fromY - toY) < 1) {
+          cell.y = toY;
+          reel.restoreCell(cell);
+          continue;
+        }
+
+        cell.y = fromY;
+        totalTweens++;
+
+        this.tweenTo(
+          cell, "y", toY,
+          380 + row * 60 + ri * 40,
+          this.bounceOut,
+          undefined,
+          () => {
+            reel.restoreCell(cell);
+            onDone();
+          }
+        );
+      }
+    }
+
+    if (totalTweens === 0) this._finishCascade();
+  }
+
+  private _finishCascade(): void {
+    this.reels.forEach((reel) => {
+      reel.clearAllSuspensions();
+      reel.clearVisualOverrides();
+      reel.symbolCells.forEach((cell) => {
+        cell.alpha = 1;
+        cell.hideGlow();
+        cell.detachRaysFromExternalLayer();
+      });
+    });
+
+    this.winningEntries = [];
+    this.winningCells.clear();
+    this.pulseTime = 0;
+    this.glowPhase = "done";
+    this.ui.dimOverlay.visible = false;
+
+    this._resolveSpinContinuation();
   }
 
   /** Set by main: called when a spin finishes and auto spin should run again. */

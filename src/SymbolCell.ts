@@ -1,6 +1,6 @@
 //SymbolCell.ts
 
-import { Container, Sprite, Graphics, Texture } from "pixi.js";
+import { Container, Sprite, Graphics, Texture, BlurFilter } from "pixi.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Colour palette — Sweet Harvest frame (amber-gold)
@@ -51,7 +51,7 @@ export class SymbolCell extends Container {
   public  readonly sprite:      Sprite;
   public  readonly background:  Graphics;
 
-  private readonly raysGraphics: Graphics;
+  public readonly raysGraphics: Graphics;
   // private readonly circleGlow:   Graphics;
   private readonly innerBloom:   Graphics;
   private readonly rimCircle:    Graphics;
@@ -75,7 +75,7 @@ export class SymbolCell extends Container {
   /** Extra radius beyond sprite circle — REDUCED for tighter circle */
   private static readonly GLOW_EXTRA  = 0;
   /** Gap between glow circle edge and ray base (px) */
-  private static readonly RAY_GAP     = 0.5;
+  private static readonly RAY_GAP     = 7;
   /** Number of rays */
   private static readonly RAY_COUNT   = 24;
   /** Rotation speed */
@@ -103,6 +103,7 @@ export class SymbolCell extends Container {
     // ── 2. Rays (behind circle) ───────────────────────────────────────────
     this.raysGraphics         = new Graphics();
     this.raysGraphics.visible = false;
+    this.raysGraphics.zIndex = 100;
     this.addChild(this.raysGraphics);
 
     // ── 3. Circle glow bloom (behind sprite) ──────────────────────────────
@@ -145,6 +146,7 @@ export class SymbolCell extends Container {
     this._fitSprite();
   }
 
+  // SymbolCell.ts — update showGlow()
   showGlow(alpha = 1.0, delta = 0): void {
     const a = Math.max(0, Math.min(1, alpha));
     this.glowActive = true;
@@ -152,15 +154,23 @@ export class SymbolCell extends Container {
     this.rayAngle   += delta * SymbolCell.RAY_SPEED;
     this.pulsePhase += delta * SymbolCell.PULSE_SPEED;
 
-    // Breathes 65 % → 100 %
     const pulse = 0.65 + 0.35 * (0.5 + 0.5 * Math.sin(this.pulsePhase));
     const pa    = a * pulse;
 
     this.raysGraphics.visible = true;
-    // this.circleGlow.visible   = true;
     this.innerBloom.visible   = true;
     this.rimCircle.visible    = true;
     this.rimCircle.alpha      = pa;
+
+    // ── Sync ray layer world position ──────────────────────────────────────
+    // raysGraphics may live on highlightLayer; reposition it to match this
+    // cell's world position so rays appear exactly over the symbol.
+    if (this.raysGraphics.parent && this.raysGraphics.parent !== this) {
+      const worldPos = this.getGlobalPosition();
+      const localPos = this.raysGraphics.parent.toLocal(worldPos);
+      this.raysGraphics.x = localPos.x;
+      this.raysGraphics.y = localPos.y;
+    }
 
     this._drawRays(pa);
     this._drawCircleGlow(pa);
@@ -202,65 +212,83 @@ export class SymbolCell extends Container {
    *   CORE  — brighter gold strip down the centre
    * Short alternate rays add depth without clutter.
    */
-  private _drawRays(pa: number): void {
-    const g  = this.raysGraphics;
-    g.clear();
-    g.lineStyle(0);
+private _drawRays(pa: number): void {
+  const g = this.raysGraphics;
+  g.clear();
+  g.lineStyle(0);
 
-    const cx     = this.cx;
-    const cy     = this.cy;
-    const N      = SymbolCell.RAY_COUNT;
-    const BASE_R = this.glowR + SymbolCell.RAY_GAP;
-    const TIP_R  = Math.sqrt(this.cellW * this.cellW + this.cellH * this.cellH) * 0.59;
+  const cx      = this.cx;
+  const cy      = this.cy;
+  const N       = SymbolCell.RAY_COUNT;
+  const BASE_R  = this.glowR + SymbolCell.RAY_GAP;
+  const TIP_R   = Math.sqrt(this.cellW * this.cellW + this.cellH * this.cellH) * 0.59;
 
-    const HALF_A      = (Math.PI * 2 / N) * 0.22;
-    const HALF_A_CORE = HALF_A * 0.28;
+  for (let i = 0; i < N; i++) {
+    const angle  = this.rayAngle + (i / N) * Math.PI * 2;
+    const isMain = i % 2 === 0;
 
-    for (let i = 0; i < N; i++) {
-      const angle  = this.rayAngle + (i / N) * Math.PI * 2;
-      const isMain = i % 2 === 0;
-      const tipR   = isMain ? TIP_R : TIP_R * 0.55;
+    const rayLength = isMain ? TIP_R - BASE_R : (TIP_R - BASE_R) * 0.50;
+    const rayWidth  = isMain ? 10 : 5;  // ← control thickness here
 
-      const cosA = Math.cos(angle);
-      const sinA = Math.sin(angle);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
 
-      // Base corners on the circle circumference
-      const bLx = cx + Math.cos(angle - HALF_A) * BASE_R;
-      const bLy = cy + Math.sin(angle - HALF_A) * BASE_R;
-      const bRx = cx + Math.cos(angle + HALF_A) * BASE_R;
-      const bRy = cy + Math.sin(angle + HALF_A) * BASE_R;
-      const tX  = cx + cosA * tipR;
-      const tY  = cy + sinA * tipR;
+    // Rectangle center point (midpoint along the ray direction)
+    const midDist = BASE_R + rayLength / 2;
+    const midX = cx + cos * midDist;
+    const midY = cy + sin * midDist;
 
-      // Outer body — warm amber
-      g.beginFill(RAY_AMBER, pa * (isMain ? 0.48 : 0.22));
-      g.moveTo(bLx, bLy);
-      g.lineTo(bRx, bRy);
-      g.lineTo(tX,  tY);
+    // Perpendicular axis (for rectangle width)
+    const perpX = -sin;
+    const perpY =  cos;
+
+    // 4 corners of the rectangle
+    const hw = rayWidth / 2;      // half width
+    const hl = rayLength / 2;     // half length
+
+    const x0 = midX + perpX * hw + cos * (-hl);
+    const y0 = midY + perpY * hw + sin * (-hl);
+
+    const x1 = midX + perpX * (-hw) + cos * (-hl);
+    const y1 = midY + perpY * (-hw) + sin * (-hl);
+
+    const x2 = midX + perpX * (-hw) + cos * hl;
+    const y2 = midY + perpY * (-hw) + sin * hl;
+
+    const x3 = midX + perpX * hw + cos * hl;
+    const y3 = midY + perpY * hw + sin * hl;
+
+    // ── Outer soft body ──────────────────────────────────────────────────
+    g.beginFill(RAY_AMBER, pa * (isMain ? 0.45 : 0.20));
+    g.moveTo(x0, y0);
+    g.lineTo(x1, y1);
+    g.lineTo(x2, y2);
+    g.lineTo(x3, y3);
+    g.closePath();
+    g.endFill();
+
+    // ── Bright core strip (main rays only) — narrower inner rectangle ────
+    if (isMain) {
+      const cw = rayWidth * 0.30;  // core is 30% of full width
+      const cx0 = midX + perpX * cw  + cos * (-hl);
+      const cy0 = midY + perpY * cw  + sin * (-hl);
+      const cx1 = midX + perpX * (-cw) + cos * (-hl);
+      const cy1 = midY + perpY * (-cw) + sin * (-hl);
+      const cx2 = midX + perpX * (-cw) + cos * hl;
+      const cy2 = midY + perpY * (-cw) + sin * hl;
+      const cx3 = midX + perpX * cw  + cos * hl;
+      const cy3 = midY + perpY * cw  + sin * hl;
+
+      g.beginFill(RAY_TIP, pa * 0.75);
+      g.moveTo(cx0, cy0);
+      g.lineTo(cx1, cy1);
+      g.lineTo(cx2, cy2);
+      g.lineTo(cx3, cy3);
       g.closePath();
       g.endFill();
-
-      // Bright gold core (main rays only)
-      if (isMain) {
-        const cLx = cx + Math.cos(angle - HALF_A_CORE) * BASE_R;
-        const cLy = cy + Math.sin(angle - HALF_A_CORE) * BASE_R;
-        const cRx = cx + Math.cos(angle + HALF_A_CORE) * BASE_R;
-        const cRy = cy + Math.sin(angle + HALF_A_CORE) * BASE_R;
-
-        g.beginFill(RAY_TIP, pa * 0.70);
-        g.moveTo(cLx, cLy);
-        g.lineTo(cRx, cRy);
-        g.lineTo(tX,  tY);
-        g.closePath();
-        g.endFill();
-
-        // Small bright flare dot at the tip
-        // g.beginFill(GOLD_HOT, pa * 0.55);
-        // g.drawCircle(tX, tY, 3.5);
-        // g.endFill();
-      }
     }
   }
+}
 
   // ─── Private: amber-gold circular bloom ───────────────────────────────────
 
@@ -351,5 +379,20 @@ export class SymbolCell extends Container {
     g.drawCircle(cx, cy, gr - 4);
 
     g.lineStyle(0);
+  }
+
+  attachRaysToExternalLayer(layer: Container): void {
+    if (this.raysGraphics.parent) {
+      this.raysGraphics.parent.removeChild(this.raysGraphics);
+    }
+    layer.addChild(this.raysGraphics);
+  }
+  
+  /** Restores raysGraphics back into this cell (called on clearHighlights). */
+  detachRaysFromExternalLayer(): void {
+    if (this.raysGraphics.parent) {
+      this.raysGraphics.parent.removeChild(this.raysGraphics);
+    }
+    this.addChildAt(this.raysGraphics, 1); // slot 1 = behind sprite
   }
 }
