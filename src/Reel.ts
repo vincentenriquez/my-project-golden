@@ -1,6 +1,8 @@
 //Reel.ts
 import { Container, Sprite, Texture, BlurFilter } from "pixi.js";
 import { SymbolCell } from "./SymbolCell";
+import { getAnimationFrames } from "./symbols";
+import { WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "./symbols";
 
 export interface ReelConfig {
   reelWidth:      number;
@@ -58,12 +60,16 @@ export class Reel {
       const cell = new SymbolCell(textures[symbolId], symbolId, config.symbolSize, config.symbolSize);
       cell.x = Math.round((config.reelWidth - config.symbolSize) / 2);
       cell.y = j * config.symbolSize;
+
+      // ✅ Apply animation for wild/scatter on initial construction
+      if (symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID) {
+        const frames = getAnimationFrames(symbolId);
+        if (frames.length > 0) cell.setAnimated(frames);
+      }
+
       this.symbolCells.push(cell);
       this.container.addChild(cell);
     }
-
-    this.position         = Math.floor(Math.random() * this.strip.length);
-    this.previousPosition = this.position;
   }
 
   // ── Suspension API ────────────────────────────────────────────────────────
@@ -127,8 +133,25 @@ export class Reel {
       const stripIndex = (normalizedTop + sIdx) % len;
       const baseId = this.strip[stripIndex];
       const symbolId = this.visualOverrides.get(sIdx) ?? baseId;
-      if (this.textures[symbolId] && cell.sprite.texture !== this.textures[symbolId]) {
-        cell.setTexture(this.textures[symbolId], symbolId);
+      const isAnimated = symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID;
+
+      if (isAnimated) {
+        // Only re-apply if the symbol actually changed
+        if (cell.symbolId !== symbolId) {
+          const frames = getAnimationFrames(symbolId);
+          if (frames.length > 0) {
+            cell.setAnimated(frames);
+            cell.symbolId = symbolId;
+          }
+        }
+      } else {
+        // Switching away from an animated symbol — restore static
+        if (cell.symbolId === WILD_SYMBOL_ID || cell.symbolId === SCATTER_SYMBOL_ID) {
+          cell.clearAnimated();
+        }
+        if (this.textures[symbolId] && cell.sprite.texture !== this.textures[symbolId]) {
+          cell.setTexture(this.textures[symbolId], symbolId);
+        }
       }
       cell.y = sIdx * symbolSize - frac * symbolSize;
     }

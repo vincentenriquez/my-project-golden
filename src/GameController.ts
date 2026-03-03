@@ -9,6 +9,7 @@ import {
   SCATTER_SYMBOL_ID,
   TOTAL_WAYS,
   getWeightedRandomSymbol,
+  getWeightedRandomSymbol_noWild,
   PAYTABLE,
   SCATTER_PAYTABLE,
   FREE_SPINS_AWARDED,
@@ -299,6 +300,8 @@ export class GameController {
 
     if (options?.forceMatrix) return options.forceMatrix;
 
+    const WILD_ALLOWED_REELS = new Set([1, 2, 3]); // Only allow wilds on the first 3 reels for better balance
+
     const matrixPerReel: number[][] = [];
     for (let reelIndex = 0; reelIndex < reelsCount; reelIndex++) {
       const column: number[] = [];
@@ -314,6 +317,9 @@ export class GameController {
           symbolId = options?.weighted
             ? getWeightedRandomSymbol()
             : Math.floor(Math.random() * TOTAL_SYMBOLS);
+        }
+        if (symbolId === WILD_SYMBOL_ID && !WILD_ALLOWED_REELS.has(reelIndex)) {
+          symbolId = getWeightedRandomSymbol_noWild();
         }
         column.push(symbolId);
       }
@@ -665,7 +671,10 @@ export class GameController {
       const targetY = startY - this.config.symbolSize * 0.9;
 
       // Clone the visible sprite (we only need the texture)
-      const clone = new Sprite(cell.sprite.texture);
+      const cloneTexture = cell.sprite.visible
+        ? cell.sprite.texture
+        : (cell as any)._animatedSprite?.texture ?? cell.sprite.texture;
+      const clone = new Sprite(cloneTexture);
       clone.anchor.set(0.5);
       clone.x = startX;
       clone.y = startY;
@@ -810,11 +819,7 @@ export class GameController {
         let matchesOnThisReel = 0;
         for (let row = 0; row < symbolsPerReel; row++) {
           const cell = matrix[row][reel];
-          if (symbol === WILD_SYMBOL_ID) {
-            if (cell === WILD_SYMBOL_ID) matchesOnThisReel++;
-          } else {
-            if (cell === symbol || cell === WILD_SYMBOL_ID) matchesOnThisReel++;
-          }
+          if (cell === symbol || cell === WILD_SYMBOL_ID) matchesOnThisReel++;
         }
         if (matchesOnThisReel === 0) break;
         consecutiveReels++;
@@ -847,21 +852,7 @@ export class GameController {
   }
 
   private applyExpandingWilds(matrix: number[][]): number[][] {
-    const expanded = matrix.map((row) => [...row]);
-    for (let reel = 0; reel < this.config.reelsCount; reel++) {
-      let hasWild = false;
-      for (let row = 0; row < matrix.length; row++) {
-        if (matrix[row][reel] === WILD_SYMBOL_ID) { hasWild = true; break; }
-      }
-      if (hasWild) {
-        for (let row = 0; row < matrix.length; row++) {
-          if (expanded[row][reel] !== SCATTER_SYMBOL_ID) {
-            expanded[row][reel] = WILD_SYMBOL_ID;
-          }
-        }
-      }
-    }
-    return expanded;
+    return matrix.map((row) => [...row]);
   }
 
   clearHighlights(): void {
@@ -914,31 +905,31 @@ export class GameController {
     const expandedMatrix = this.applyExpandingWilds(matrix);
 
     // STEP 2b: Visually update reel sprites for expanded positions
-    this.reels.forEach((r) => r.clearVisualOverrides());
-    for (let reel = 0; reel < reelsCount; reel++) {
-      for (let row = 0; row < symbolsPerReel; row++) {
-        if (expandedMatrix[row][reel] !== matrix[row][reel]) {
-          this.reels[reel].setVisualOverride(row, expandedMatrix[row][reel]);
-        }
-      }
-    }
-    this.updateReelsVisuals();
+    // this.reels.forEach((r) => r.clearVisualOverrides());
+    // for (let reel = 0; reel < reelsCount; reel++) {
+    //   for (let row = 0; row < symbolsPerReel; row++) {
+    //     if (expandedMatrix[row][reel] !== matrix[row][reel]) {
+    //       this.reels[reel].setVisualOverride(row, expandedMatrix[row][reel]);
+    //     }
+    //   }
+    // }
+    // this.updateReelsVisuals();
 
     // STEP 3: Evaluate 243-ways on EXPANDED matrix
     const waysResults = this.evaluateWays(expandedMatrix, this.bet);
 
     // STEP 4: Register expanding-wild sprites for highlight
-    for (let reel = 0; reel < reelsCount; reel++) {
-      let hasWild = false;
-      for (let row = 0; row < symbolsPerReel; row++) {
-        if (expandedMatrix[row][reel] === WILD_SYMBOL_ID) { hasWild = true; break; }
-      }
-      if (hasWild) {
-        for (let row = 0; row < symbolsPerReel; row++) {
-          this._markCellAt(reel, row);
-        }
-      }
-    }
+    // for (let reel = 0; reel < reelsCount; reel++) {
+    //   let hasWild = false;
+    //   for (let row = 0; row < symbolsPerReel; row++) {
+    //     if (expandedMatrix[row][reel] === WILD_SYMBOL_ID) { hasWild = true; break; }
+    //   }
+    //   if (hasWild) {
+    //     for (let row = 0; row < symbolsPerReel; row++) {
+    //       this._markCellAt(reel, row);
+    //     }
+    //   }
+    // }
 
     // STEP 5: Sum all ways wins + register winning symbol sprites.
     // Wild cells in a winning chain resolve visually to the highest-paying

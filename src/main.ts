@@ -9,14 +9,14 @@ import {
   Text,
   TextStyle,
 } from "pixi.js";
-import { SYMBOL_ASSETS } from "./symbols";
+import { SYMBOL_ASSETS, WILD_SYMBOL_ID } from "./symbols";
 import { Reel } from "./Reel";
 import { GameController } from "./GameController";
 import { WinCountUp, CountUpCallback } from "./WinCountUp";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
-const REEL_WIDTH = 155;
+const REEL_WIDTH = 160;
 const SYMBOL_SIZE = 100;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
@@ -160,7 +160,7 @@ let mask: Graphics;
 let gameController: GameController;
 
 // ---------- Load Assets ----------
-await Assets.load([...SYMBOL_ASSETS, BG_IMAGE, "/Frame_13.png", "/playBtnn.png", "/stopBtnn.png"]);
+await Assets.load([...SYMBOL_ASSETS, BG_IMAGE, "/Frame_13.png", "/playBtnn.png", "/stopBtnn.png", "/wild_sheet.json"]);
 const bgQuickBtn = Texture.from("/bgQuickBtn.png");
 const spinTexture = Texture.from("/Frame_13.png");
 const autoSpinPlay = Texture.from("/playBtnn.png");
@@ -168,6 +168,13 @@ const autoSpinStop = Texture.from("/stopBtnn.png");
 
 function onAssetsLoaded() {
   slotTextures = SYMBOL_ASSETS.map((url) => Texture.from(url));
+  // Ensure Wild's base texture is a single animation frame, not the full sheet image.
+  // The reel will then upgrade it to a looping AnimatedSprite via getAnimationFrames().
+  try {
+    slotTextures[WILD_SYMBOL_ID] = Texture.from("wild_00.png");
+  } catch {
+    // Fallback: keep existing texture; animation will still apply on reels.
+  }
   buildSlotMachine();
 }
 onAssetsLoaded();

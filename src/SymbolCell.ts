@@ -1,6 +1,6 @@
 //SymbolCell.ts
 
-import { Container, Sprite, Graphics, Texture, BlurFilter } from "pixi.js";
+import { Container, Sprite, Graphics, Texture, BlurFilter, AnimatedSprite, Assets } from "pixi.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Colour palette — Sweet Harvest frame (amber-gold)
@@ -141,7 +141,9 @@ export class SymbolCell extends Container {
   // ─── Public API ───────────────────────────────────────────────────────────
 
   setTexture(texture: Texture, symbolId: number): void {
-    this.symbolId       = symbolId;
+    this.symbolId = symbolId;
+    // If currently showing animated sprite, don't overwrite texture
+    if (this._animatedSprite) return;
     this.sprite.texture = texture;
     this._fitSprite();
   }
@@ -288,6 +290,56 @@ private _drawRays(pa: number): void {
       g.endFill();
     }
   }
+}
+
+// Add inside SymbolCell class
+
+private _animatedSprite: AnimatedSprite | null = null;
+
+/**
+ * Replace the static sprite with an AnimatedSprite for wild/scatter symbols.
+ * Call this after construction when you know the symbolId is wild or scatter.
+ */
+setAnimated(frames: Texture[], animationSpeed = 0.15): void {
+  // Remove old animated sprite if any
+  if (this._animatedSprite) {
+    this._animatedSprite.stop();
+    this.removeChild(this._animatedSprite);
+    this._animatedSprite = null;
+  }
+
+  // Hide the static sprite
+  this.sprite.visible = false;
+
+  // Create animated sprite
+  this._animatedSprite = new AnimatedSprite(frames);
+  this._animatedSprite.anchor.set(0.5);
+  this._animatedSprite.x = this.cx;
+  this._animatedSprite.y = this.cy;
+  this._animatedSprite.animationSpeed = animationSpeed;
+  this._animatedSprite.loop = true;
+  this._animatedSprite.play();
+
+  // Scale to fit cell same as static sprite
+  const maxR  = this.spriteR * 2 - 8;
+  const scale = Math.min(
+    maxR / this._animatedSprite.width,
+    maxR / this._animatedSprite.height
+  );
+  this._animatedSprite.scale.set(scale);
+
+  // Insert above background and rays but below glow layers
+  this.addChildAt(this._animatedSprite, 2);
+}
+
+/** Stop and remove animation, restore static sprite. */
+clearAnimated(): void {
+  if (this._animatedSprite) {
+    this._animatedSprite.stop();
+    this.removeChild(this._animatedSprite);
+    this._animatedSprite = null;
+  }
+  this.sprite.visible = true;
 }
 
   // ─── Private: amber-gold circular bloom ───────────────────────────────────

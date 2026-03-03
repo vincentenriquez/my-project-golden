@@ -4,6 +4,8 @@
  * Encapsulates: symbol IDs, weights, paytables, and weighted RNG.
  */
 
+import { Texture, Assets } from "pixi.js";
+
 export const SYMBOL_ASSETS = [
   "/cherry.png",
   "/strawberry.png",
@@ -13,7 +15,7 @@ export const SYMBOL_ASSETS = [
   "/lemonSlice.png",
   "/mangoSlice.png",
   "/orangeSlice.png",
-  "/wild.png",
+  "/wild_sheet.png",
   "/image_20-removebg-preview.png",
 ];
 
@@ -72,4 +74,37 @@ export function getWeightedRandomSymbol(): number {
     if (rand <= cumulative) return i;
   }
   return SYMBOL_WEIGHTS.length - 1;
+}
+
+// In symbols.ts — add this helper
+export function getWeightedRandomSymbol_noWild(): number {
+  const weights = [...SYMBOL_WEIGHTS];
+  weights[WILD_SYMBOL_ID] = 0;
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  const rand = Math.random() * totalWeight;
+  let cumulative = 0;
+  for (let i = 0; i < weights.length; i++) {
+    cumulative += weights[i];
+    if (rand <= cumulative) return i;
+  }
+  return 0;
+}
+
+export function getAnimationFrames(symbolId: number): Texture[] {
+  const key = symbolId === WILD_SYMBOL_ID ? "wild_sheet.json" : "scatter_sheet.json";
+  const sheet = Assets.get(key) ?? Assets.get(`/${key}`);
+
+  // ✅ Add this to debug in browser console
+  console.log(`[getAnimationFrames] symbolId=${symbolId} sheet=`, sheet);
+
+  if (sheet?.textures) {
+    const frames = Object.keys(sheet.textures)
+      .sort()
+      .map((k: string) => sheet.textures[k] as Texture);
+    console.log(`[getAnimationFrames] frames found:`, frames.length);
+    return frames;
+  }
+
+  console.warn(`[getAnimationFrames] No textures found for symbolId=${symbolId}`);
+  return [];
 }

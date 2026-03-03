@@ -1,0 +1,46 @@
+{
+  "frames": {
+    "wild_00.png": {
+      "frame": { "x": 0, "y": 0, "w": 150, "h": 150 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 150, "h": 150 },
+      "sourceSize": { "w": 150, "h": 150 }
+    },
+    "wild_01.png": {
+      "frame": { "x": 160, "y": 0, "w": 150, "h": 150 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 150, "h": 150 },
+      "sourceSize": { "w": 150, "h": 150 }
+    },
+    "wild_02.png": {
+      "frame": { "x": 310, "y": 0, "w": 150, "h": 150 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 150, "h": 150 },
+      "sourceSize": { "w": 150, "h": 150 }
+    },
+    "wild_03.png": {
+      "frame": { "x": 460, "y": 0, "w": 150, "h": 150 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 150, "h": 150 },
+      "sourceSize": { "w": 150, "h": 150 }
+    }
+  },
+
+  "animations": {
+    "enemy" : ["wild_00.png", "wild_01.png", "wild_02.png", "wild_03.png"]
+  },
+  
+  "meta": {
+    "app": "TexturePacker",
+    "version": "1.0",
+    "image": "wild_sheet.png",
+    "format": "RGBA8888",
+    "size": { "w": 627, "h": 150 }
+  },
+  "scale": "1",
+  "smartupdate": "5-627-150"
+}
