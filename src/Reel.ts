@@ -146,7 +146,10 @@ export class Reel {
         }
       } else {
         // Switching away from an animated symbol — restore static
-        if (cell.symbolId === WILD_SYMBOL_ID || cell.symbolId === SCATTER_SYMBOL_ID) {
+        if (
+          (cell.symbolId === WILD_SYMBOL_ID || cell.symbolId === SCATTER_SYMBOL_ID) &&
+          symbolId !== WILD_SYMBOL_ID && symbolId !== SCATTER_SYMBOL_ID
+        ) {
           cell.clearAnimated();
         }
         if (this.textures[symbolId] && cell.sprite.texture !== this.textures[symbolId]) {

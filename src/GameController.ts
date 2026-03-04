@@ -10,6 +10,7 @@ import {
   TOTAL_WAYS,
   getWeightedRandomSymbol,
   getWeightedRandomSymbol_noWild,
+  getAnimationFrames,
   PAYTABLE,
   SCATTER_PAYTABLE,
   FREE_SPINS_AWARDED,
@@ -171,6 +172,8 @@ export class GameController {
   private pulseTime = 0;
   private glowPhase: "pulsing" | "fading" | "done" = "done";
   private glowFadeStart = 0;
+  /** Ensures we resolve win animations (cascade / continuation) only once per win. */
+  private winAnimationsAlreadyResolved = false;
 
   /** Active floating clones for the current win */
   private floatingSymbols: FloatingWinSymbol[] = [];
@@ -185,7 +188,7 @@ export class GameController {
   /** Fade-out duration (ms) */
   private static readonly FADE_DURATION = 320;
   /** How long the glow pulses before fading (ms) */
-  private static readonly GLOW_SHOW_DURATION = 800;
+  private static readonly GLOW_SHOW_DURATION = 1000;
   /** Duration of the glow fade-out (ms) */
   private static readonly GLOW_FADE_DURATION = 280;
   /** Delay after win display before cascade starts (ms) */
@@ -474,17 +477,40 @@ export class GameController {
     this._updateFloatingSymbols();
   }
 
-    private _onSliceGroupComplete(): void {
+  private _onSliceGroupComplete(): void {
     if (this.pendingSliceGroups > 0) this.pendingSliceGroups--;
-    // when last group finished, display the pending payout (if any)
-    if (this.pendingSliceGroups === 0 && this.pendingPayoutToShow !== null) {
-      const amount = this.pendingPayoutToShow;
-      this.pendingPayoutToShow = null;
-      this._showWinAmount(amount);
+    // When the last slice group finishes, resolve the rest of the win flow
+    // (cascade symbols or continue the spin) exactly once.
+    if (this.pendingSliceGroups === 0) {
+      this._onAllWinAnimationsComplete();
     }
   }
 
-  /** Animate and reveal the Win: [amount] UI once slicing finished. */
+  /**
+   * Final step after all win symbol animations (rise + slice) are done.
+   * Either starts the cascade (for standard wins) or directly resolves spin continuation.
+   */
+  private _onAllWinAnimationsComplete(): void {
+    if (this.winAnimationsAlreadyResolved) return;
+    this.winAnimationsAlreadyResolved = true;
+
+    // If there are winning entries, we still need to cascade them out.
+    if (this.winningEntries.length > 0) {
+      setTimeout(() => {
+        // It's possible the win was cleared mid-way; in that case just continue the spin.
+        if (this.winningEntries.length === 0) {
+          this._resolveSpinContinuation();
+          return;
+        }
+        this._cascadeSymbols();
+      }, GameController.CASCADE_WIN_DELAY);
+    } else {
+      // No cascade needed (e.g. fallback / edge-case paths) — just continue the spin.
+      this._resolveSpinContinuation();
+    }
+  }
+
+  /** Animate and reveal the Win: [amount] UI. */
   private _showWinAmount(amount: number): void {
     if (this.winDisplayFallbackTimer !== null) {
       clearTimeout(this.winDisplayFallbackTimer);
@@ -520,11 +546,6 @@ export class GameController {
       320,
       (t) => 1 - Math.pow(1 - t, 2) // easeOutQuad for smoother fade-in
     );
-
-    setTimeout(() => {
-      if (this.winningEntries.length === 0) return;
-      this._cascadeSymbols();
-    }, GameController.CASCADE_WIN_DELAY);
   }
 
     /**
@@ -542,32 +563,43 @@ export class GameController {
     const dispW = texW * clone.scale.x;
     const dispH = texH * clone.scale.y;
 
-    const offsets = [
-      { dx: -dispW * 0.25, dy: -dispH * 0.25 },
-      { dx:  dispW * 0.25, dy: -dispH * 0.25 },
-      { dx: -dispW * 0.25, dy:  dispH * 0.25 },
-      { dx:  dispW * 0.25, dy:  dispH * 0.25 },
-    ];
+    const SLICE_COLS = 5;
+    const SLICE_ROWS = 5;
+    const SLICE_COUNT = SLICE_COLS * SLICE_ROWS; // 10 slices
 
-    const halfW = Math.floor(texW / 2);
-    const halfH = Math.floor(texH / 2);
+    const sliceW = Math.floor(texW / SLICE_COLS);
+    const sliceH = Math.floor(texH / SLICE_ROWS);
 
     const frame = texture.frame ?? { x: 0, y: 0 };
     const fx = typeof frame.x === "number" ? frame.x : 0;
     const fy = typeof frame.y === "number" ? frame.y : 0;
 
-    const rects = [
-      new Rectangle(fx,           fy,           halfW,        halfH),
-      new Rectangle(fx + halfW,   fy,           texW - halfW, halfH),
-      new Rectangle(fx,           fy + halfH,   halfW,        texH - halfH),
-      new Rectangle(fx + halfW,   fy + halfH,   texW - halfW, texH - halfH),
-    ];
+    const rects: Rectangle[] = [];
+    const offsets: { dx: number; dy: number }[] = [];
+
+    for (let row = 0; row < SLICE_ROWS; row++) {
+      for (let col = 0; col < SLICE_COLS; col++) {
+        const isLastCol = col === SLICE_COLS - 1;
+        const isLastRow = row === SLICE_ROWS - 1;
+        const w = isLastCol ? texW - sliceW * (SLICE_COLS - 1) : sliceW;
+        const h = isLastRow ? texH - sliceH * (SLICE_ROWS - 1) : sliceH;
+        rects.push(new Rectangle(fx + col * sliceW, fy + row * sliceH, w, h));
+
+        // Offset each piece from clone center so they spread from their original position
+        const centerCol = (SLICE_COLS - 1) / 2;
+        const centerRow = (SLICE_ROWS - 1) / 2;
+        offsets.push({
+          dx: (col - centerCol) * (dispW / SLICE_COLS),
+          dy: (row - centerRow) * (dispH / SLICE_ROWS),
+        });
+      }
+    }
 
     const pieces: Sprite[] = [];
     const source = (texture as { source?: unknown }).source ?? (texture as { baseTexture?: unknown }).baseTexture;
 
     try {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < SLICE_COUNT; i++) {
         const tex = source
           ? new Texture({ source, frame: rects[i] } as ConstructorParameters<typeof Texture>[0])
           : new Texture(texture);
@@ -591,8 +623,8 @@ export class GameController {
     const pieceAnimTime = 520;
     for (let i = 0; i < pieces.length; i++) {
       const p = pieces[i];
-      const dirX = Math.sign(offsets[i].dx) || (i % 2 === 0 ? -1 : 1);
-      const dirY = Math.sign(offsets[i].dy) || (i < 2 ? -1 : 1);
+      const dirX = offsets[i].dx !== 0 ? Math.sign(offsets[i].dx) : (Math.random() > 0.5 ? 1 : -1);
+      const dirY = offsets[i].dy !== 0 ? Math.sign(offsets[i].dy) : (Math.random() > 0.5 ? 1 : -1);
 
       const targetX = p.x + dirX * (dispW * 0.45 + Math.random() * 18);
       const targetY = p.y + dirY * (dispH * 0.35 + Math.random() * 18);
@@ -630,13 +662,8 @@ export class GameController {
    */
   private _spawnFloatingWinSymbols(): void {
     if (this.winningEntries.length === 0) {
-      // No symbols to animate — show win immediately
-      if (this.pendingPayoutToShow !== null) {
-        const amount = this.pendingPayoutToShow;
-        this.pendingPayoutToShow = null;
-        this.pendingSliceGroups = 0;
-        this._showWinAmount(amount);
-      }
+      // No symbols to animate — just resolve the rest of the win flow.
+      this._onAllWinAnimationsComplete();
       return;
     }
 
@@ -703,17 +730,13 @@ export class GameController {
     // track how many slice groups we expect — used to show win after all done
     this.pendingSliceGroups = spawned.length;
 
-    // Fallback: if slice completion callbacks never fire, show win after max animation time
+    // Fallback: if slice completion callbacks never fire, still resolve the win flow
+    // (cascade / continuation) after the maximum expected animation time.
     const pieceAnimTime = 520;
     const maxWait = GameController.RISE_DURATION + pieceAnimTime + 400;
     this.winDisplayFallbackTimer = setTimeout(() => {
       this.winDisplayFallbackTimer = null;
-      if (this.pendingPayoutToShow !== null) {
-        const amount = this.pendingPayoutToShow;
-        this.pendingPayoutToShow = null;
-        this.pendingSliceGroups = 0;
-        this._showWinAmount(amount);
-      }
+      this._onAllWinAnimationsComplete();
     }, maxWait);
   }
 
@@ -857,6 +880,7 @@ export class GameController {
 
   clearHighlights(): void {
     this.glowPhase = "done";
+    this.winAnimationsAlreadyResolved = false;
     this._clearFloatingSymbols();
 
     // Remove any in-flight clone / piece sprites from the float layer
@@ -943,23 +967,23 @@ export class GameController {
           const cell = expandedMatrix[row][r];
           if (cell === win.symbol || cell === WILD_SYMBOL_ID) {
             this._markCellAt(r, row);
-            if (cell === WILD_SYMBOL_ID) {
-              const key = `${r}_${row}`;
-              const prev = wildOverrides.get(key);
-              if (!prev || win.payout > prev.payout) {
-                wildOverrides.set(key, { symbol: win.symbol, payout: win.payout });
-              }
-            }
+            // if (cell === WILD_SYMBOL_ID) {
+            //   const key = `${r}_${row}`;
+            //   const prev = wildOverrides.get(key);
+            //   if (!prev || win.payout > prev.payout) {
+            //     wildOverrides.set(key, { symbol: win.symbol, payout: win.payout });
+            //   }
+            // }
           }
         }
       }
     });
 
-    for (const [key, { symbol: resolvedSym }] of wildOverrides) {
-      const [ri, ro] = key.split("_");
-      this.reels[parseInt(ri)].setVisualOverride(parseInt(ro), resolvedSym);
-    }
-    if (wildOverrides.size > 0) this.updateReelsVisuals();
+    // for (const [key, { symbol: resolvedSym }] of wildOverrides) {
+    //   const [ri, ro] = key.split("_");
+    //   this.reels[parseInt(ri)].setVisualOverride(parseInt(ro), resolvedSym);
+    // }
+    // if (wildOverrides.size > 0) this.updateReelsVisuals();
 
     // STEP 6: Scatter payout + free spins trigger
     let spinsWonThisSpin = 0;
@@ -1012,6 +1036,14 @@ export class GameController {
 
       this.ui.resultText.text = "";
       this.ui.totalWinText.text = "0.00";
+
+      // Show WIN text and start counters immediately when a win is detected,
+      // before any winning-symbol upward movement begins.
+      if (this.pendingPayoutToShow !== null) {
+        const amount = this.pendingPayoutToShow;
+        this.pendingPayoutToShow = null;
+        this._showWinAmount(amount);
+      }
     }
 
     // STEP 9: Result text (win text deferred to _showWinAmount after slicing)
@@ -1147,8 +1179,23 @@ export class GameController {
         reel.suspendCell(cell);
 
         const newSym = newColumn[row];
-        const tex = reel.getTexture(newSym);
-        if (tex) cell.setTexture(tex, newSym);
+
+        // ── Animate Wild/Scatter; static for everything else ──────────────────
+        if (newSym === WILD_SYMBOL_ID || newSym === SCATTER_SYMBOL_ID) {
+          cell.clearAnimated();                        // reset any stale anim first
+          const frames = getAnimationFrames(newSym);
+          if (frames.length > 0) {
+            cell.setAnimated(frames);                  // ← plays the Wild/Scatter anim
+          } else {
+            const tex = reel.getTexture(newSym);
+            if (tex) cell.setTexture(tex, newSym);     // fallback if sheet not loaded
+          }
+        } else {
+          cell.clearAnimated();                        // stop any lingering Wild anim
+          const tex = reel.getTexture(newSym);
+          if (tex) cell.setTexture(tex, newSym);
+        }
+
         cell.alpha = 1;
         cell.hideGlow();
         cell.detachRaysFromExternalLayer();
@@ -1204,7 +1251,10 @@ export class GameController {
     this.glowPhase = "done";
     this.ui.dimOverlay.visible = false;
 
-    this._resolveSpinContinuation();
+    // After symbols have fallen and new ones have been drawn, re‑evaluate
+    // the visible matrix to see if another win has been created by the cascade.
+    const nextMatrix = this.getVisibleMatrix();
+    this.evaluateAndShowResults(nextMatrix);
   }
 
   /** Set by main: called when a spin finishes and auto spin should run again. */

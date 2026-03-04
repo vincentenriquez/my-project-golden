@@ -16,12 +16,12 @@ import { WinCountUp, CountUpCallback } from "./WinCountUp";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
-const REEL_WIDTH = 160;
-const SYMBOL_SIZE = 100;
+const REEL_WIDTH = 163;
+const SYMBOL_SIZE = 119;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
 const REEL_STRIP_LENGTH = 14;
-const BG_IMAGE = "bgg1.jpg";
+const BG_IMAGE = "Frame_17.png";
 const MIN_BET = 10;
 const MAX_BET = 1000000;
 const AUTO_SPIN_COUNT = 10;
@@ -40,7 +40,7 @@ document.body.appendChild(app.canvas);
 const gameContainer = new Container();
 app.stage.addChild(gameContainer);
 
-const frameTexture = await Assets.load("/Frame_3.png");
+const frameTexture = await Assets.load("/Frame_4.png");
 const frameSprite = new Sprite(frameTexture);
 frameSprite.anchor.set(0.5);
 gameContainer.addChild(frameSprite);
@@ -297,7 +297,7 @@ function buildSlotMachine() {
   spinButton.width  = SPIN_BTN_SIZE;
   spinButton.height = SPIN_BTN_SIZE;
   spinButton.x = 0;
-  spinButton.y = mask.y + frameHeight + 310;
+  spinButton.y = mask.y + frameHeight + 323;
   spinButton.eventMode = "static";
   spinButton.cursor = "pointer";
   spinButton.zIndex = 100;
@@ -347,42 +347,42 @@ function buildSlotMachine() {
 
   // Balance
   const balanceContainer = new Container();
-  balanceContainer.x = -230;
-  balanceContainer.y = 484;
+  balanceContainer.x = -215;
+  balanceContainer.y = 40;
   controlsContainer.addChild(balanceContainer);
 
   const balanceLabel = new Text("BALANCE", new TextStyle({
-    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "left",
+    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left",
   }));
   balanceLabel.anchor.set(0.5);
   balanceContainer.addChild(balanceLabel);
 
   const creditsText = new Text("1000.00", new TextStyle({
-    fontSize: 20, fontWeight: "bold", align: "left", fill: 0xFDF1C0, fontFamily: "Arial",
+    fontSize: 30, fontWeight: "bold", align: "center", fill: 0xFDF1C0, fontFamily: "Arial", 
   }));
   creditsText.anchor.set(0.5);
   creditsText.x = 0;
-  creditsText.y = 22;
+  creditsText.y = 30;
   balanceContainer.addChild(creditsText);
 
   // Total win
   const totalWinContainer = new Container();
-  totalWinContainer.x = 230;
-  totalWinContainer.y = 484;
+  totalWinContainer.x = 215;
+  totalWinContainer.y = 40;
   controlsContainer.addChild(totalWinContainer);
 
   const totalWinLabel = new Text("TOTAL WIN", new TextStyle({
-    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "left",
+    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left",
   }));
   totalWinLabel.anchor.set(0.5);
   totalWinContainer.addChild(totalWinLabel);
 
   const totalWinText = new Text("0.00", new TextStyle({
-    fontSize: 20, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
+    fontSize: 30, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
   }));
   totalWinText.anchor.set(0.5);
   totalWinText.x = 0;
-  totalWinText.y = 22;
+  totalWinText.y = 30;
   totalWinContainer.addChild(totalWinText);
 
   // Auto spin buttons
@@ -394,8 +394,8 @@ function buildSlotMachine() {
   const autoSpinButton = new Sprite(autoSpinPlay);
   autoSpinButton.eventMode = "static";
   autoSpinButton.cursor = "pointer";
-  autoSpinButton.x = 273;
-  autoSpinButton.y = 97;
+  autoSpinButton.x = 274;
+  autoSpinButton.y = 198;
   spinRowContainer.addChild(autoSpinButton);
 
   const stopAutoSpinButton = new Sprite(autoSpinStop);
@@ -409,26 +409,26 @@ function buildSlotMachine() {
   // Bet controls
   const betControlsContainer = new Container();
   betControlsContainer.x = 0;
-  betControlsContainer.y = ROW_GAP * 3;
+  betControlsContainer.y = 40;
   controlsContainer.addChild(betControlsContainer);
 
   const betContainer = new Container();
   betContainer.x = 0;
-  betContainer.y = 155;
+  betContainer.y = 148;
   controlsContainer.addChild(betContainer);
 
   const betText = new Text("BET", new TextStyle({
-    fontSize: 14, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", align: "center",
+    fontSize: 16, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "'Lilita One', cursive", align: "center",
   }));
   betText.anchor.set(0.5);
   betContainer.addChild(betText);
 
   const amountLabel = new Text("10", new TextStyle({
-    fontSize: 20, fontWeight: "bold", align: "center", fontFamily: "Arial", fill: 0xFDF1C0,
+    fontSize: 30, fontWeight: "bold", align: "center", fontFamily: "Arial", fill: 0xFDF1C0,
   }));
   amountLabel.anchor.set(0.5);
   amountLabel.x = 0;
-  amountLabel.y = 22;
+  amountLabel.y = 30;
   betContainer.addChild(amountLabel);
 
   const totalBetContainer = new Container();
@@ -452,7 +452,7 @@ function buildSlotMachine() {
   minusButton.endFill();
   minusButton.width = 75;
   minusButton.height = 75;
-  minusButton.x = -189;
+  minusButton.x = -254;
   minusButton.y = 59;
   betBtnContainer.addChild(minusButton);
 
@@ -470,7 +470,7 @@ function buildSlotMachine() {
   plusButton.endFill();
   plusButton.width  = 75;
   plusButton.height = 75;
-  plusButton.x = 110;
+  plusButton.x = 175;
   plusButton.y = 59;
   betBtnContainer.addChild(plusButton);
 
@@ -483,7 +483,7 @@ function buildSlotMachine() {
   // Spin status (auto / free spin counters)
   const spinStatusContainer = new Container();
   spinStatusContainer.x = 0;
-  spinStatusContainer.y = ROW_GAP * 4 + 30;
+  spinStatusContainer.y = -280;
   controlsContainer.addChild(spinStatusContainer);
 
   const spinStatusStyle = new TextStyle({
@@ -494,7 +494,7 @@ function buildSlotMachine() {
   autoSpinText.anchor.set(0.5);
   autoSpinText.x = 0;
   autoSpinText.y = -155;
-  autoSpinText.visible = false;
+  autoSpinText.visible = true;
   spinStatusContainer.addChild(autoSpinText);
 
   const freeSpinText = new Text("FREE SPINS LEFT: 0", spinStatusStyle);

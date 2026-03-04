@@ -88,3 +88,7 @@ I want to apply the spritesheet in my wild symbol and scatter symbol to make it 
 
 Reel 1
 cherry
+
+Analyze my codebase
+
+Review my codebase and modify the logic so that the “WIN:” text is displayed simultaneously with the winning combination animation. The text should not appear before or after the animation—it must be synchronized with it.
