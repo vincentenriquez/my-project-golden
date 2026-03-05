@@ -148,6 +148,11 @@ export class SymbolCell extends Container {
     this._fitSprite();
   }
 
+  /** Whether this cell is currently showing an AnimatedSprite. */
+  hasAnimated(): boolean {
+    return this._animatedSprite !== null;
+  }
+
   // SymbolCell.ts — update showGlow()
   showGlow(alpha = 1.0, delta = 0): void {
     const a = Math.max(0, Math.min(1, alpha));
@@ -195,7 +200,7 @@ export class SymbolCell extends Container {
   // ─── Private: sprite sizing ───────────────────────────────────────────────
 
   private _fitSprite(): void {
-    const maxR  = this.spriteR * 2 - 8;
+    const maxR = this.spriteR * 2 - 8;
     const scale = Math.min(
       maxR / this.sprite.texture.width,
       maxR / this.sprite.texture.height
@@ -320,8 +325,8 @@ setAnimated(frames: Texture[], animationSpeed = 0.15): void {
   this._animatedSprite.loop = true;
   this._animatedSprite.play();
 
-  // Scale to fit cell same as static sprite
-  const maxR  = this.spriteR * 2 - 8;
+  // Scale to fit cell similarly to the static sprite.
+  const maxR = this.spriteR * 2 - 8;
   const scale = Math.min(
     maxR / this._animatedSprite.width,
     maxR / this._animatedSprite.height

@@ -2,6 +2,7 @@
 import { Container, Graphics, Text, Sprite, Rectangle, Texture } from "pixi.js";
 import type { Reel } from "./Reel";
 import { WinCountUp } from "./WinCountUp";
+import { RangeCountUp } from "./RangeCountUp";
 import type { SymbolCell } from "./SymbolCell";
 import {
   TOTAL_SYMBOLS,
@@ -120,6 +121,8 @@ export class GameController {
   private readonly highlightLayer: Container;
   private readonly tweenTo: TweenToFn;
   private readonly winCounter: WinCountUp;
+  private readonly totalWinCounter: RangeCountUp;
+  private readonly betCounter: RangeCountUp;
 
   /**
    * Separate WinCountUp instance that animates the Balance (creditsText)
@@ -136,6 +139,8 @@ export class GameController {
 
   /** Tracks the "display start" for the balance count-up (before adding win). */
   private _balanceAtWinStart: number = 0;
+  private _betDisplayValue: number = 0;
+  private _totalWinDisplayValue: number = 0;
 
   private backout: (amount: number) => (t: number) => number;
   private readonly bounceOut: (t: number) => number = (t) => t;
@@ -161,6 +166,8 @@ export class GameController {
 
   private credits: number;
   private bet: number;
+  /** Accumulates total payout across cascades within a single spin. */
+  private currentSpinTotalPayout: number = 0;
   private running = false;
   private freeSpinsRemaining = 0;
   private inFreeSpins = false;
@@ -194,6 +201,13 @@ export class GameController {
   /** Delay after win display before cascade starts (ms) */
   private static readonly CASCADE_WIN_DELAY = 0;
 
+  /** Format numbers with thousand separators and exactly two decimal places. */
+  private static formatAmount(value: number): string {
+    const [intPart, decPart] = value.toFixed(2).split(".");
+    const withSeparators = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return `${withSeparators}.${decPart}`;
+  }
+
   constructor(
     reels: Reel[],
     config: GameControllerConfig,
@@ -214,16 +228,18 @@ export class GameController {
 
     this.credits = config.initialCredits;
     this.bet = config.initialBet;
-    this.ui.creditsText.text = this.credits.toFixed(2);
-    this.ui.amountLabel.text = this.bet.toFixed(2);
+    this.ui.creditsText.text = GameController.formatAmount(this.credits);
+    this.ui.amountLabel.text = GameController.formatAmount(this.bet);
     this.ui.totalWinText.text = "0.00";
     this.ui.dimOverlay.visible = false;
     this.bounceOut = bounceOutEasing;
+    this._betDisplayValue = this.bet;
+    this._totalWinDisplayValue = 0;
 
     // ── Total Win count-up ────────────────────────────────────────────────
     // Drives the "WIN: x.xx" result text (center). totalWinText is set directly in _showWinAmount.
     this.winCounter = new WinCountUp((displayValue, isDone) => {
-      const formatted = displayValue.toFixed(2);
+      const formatted = GameController.formatAmount(displayValue);
       if (this.ui.resultText.text.startsWith("WIN: ")) {
         const hasBonus = this.ui.resultText.text.includes("|");
         const suffix   = hasBonus
@@ -231,6 +247,19 @@ export class GameController {
           : "";
         this.ui.resultText.text = `WIN: ${formatted}${suffix}`;
       }
+    });
+
+    // ── TOTAL WIN (right panel) range count-up ────────────────────────────
+    // Animates the TOTAL WIN number from previous total → new total as cascades hit.
+    this.totalWinCounter = new RangeCountUp((displayValue, isDone) => {
+      this._totalWinDisplayValue = displayValue;
+      this.ui.totalWinText.text = GameController.formatAmount(displayValue);
+    });
+
+    // ── BET (bottom panel) range count-up ─────────────────────────────────
+    this.betCounter = new RangeCountUp((displayValue, isDone) => {
+      this._betDisplayValue = displayValue;
+      this.ui.amountLabel.text = GameController.formatAmount(displayValue);
     });
 
     // ── Balance count-up ──────────────────────────────────────────────────
@@ -241,7 +270,7 @@ export class GameController {
     this.balanceCounter = new WinCountUp((displayValue, isDone) => {
       // displayValue counts 0 → totalPayout; we offset by the pre-win balance
       const rollingBalance = this._balanceAtWinStart + displayValue;
-      this.ui.creditsText.text = rollingBalance.toFixed(2);
+      this.ui.creditsText.text = GameController.formatAmount(rollingBalance);
     });
   }
 
@@ -274,7 +303,7 @@ export class GameController {
       const from = this.credits;
       this.credits -= this.bet;
       // Update instantly on deduct — no animation, keeps it snappy
-      this.ui.creditsText.text = this.credits.toFixed(2);
+      this.ui.creditsText.text = GameController.formatAmount(this.credits);
     }
   }
 
@@ -295,7 +324,16 @@ export class GameController {
   }
 
   hasEnoughCredits(): boolean { return this.credits >= this.bet; }
-  updateBetDisplay(): void { this.ui.amountLabel.text = this.bet.toFixed(2); }
+  updateBetDisplay(): void {
+    // Animate displayed BET to the new bet value.
+    const from = this._betDisplayValue;
+    const to = this.bet;
+    if (from === to) {
+      this.ui.amountLabel.text = GameController.formatAmount(this.bet);
+      return;
+    }
+    this.betCounter.start(from, to);
+  }
 
   /** Generate a result matrix (per-reel columns). */
   generateResult(options?: GenerateOptions): number[][] {
@@ -339,8 +377,12 @@ export class GameController {
     // stale animation from a previous win overwriting fresh "0.00" displays.
     this.winCounter.cancel();
     this.balanceCounter.cancel();
+    this.totalWinCounter.cancel();
 
-    this.ui.totalWinText.text = "0.00";
+    // Reset per-spin total win accumulator and display.
+    this.currentSpinTotalPayout = 0;
+    this.ui.totalWinText.text   = "0.00";
+    this._totalWinDisplayValue  = 0;
     if (this.running) return;
     this.running = true;
     this.clearHighlights();
@@ -474,6 +516,8 @@ export class GameController {
 
     this.winCounter.update(deltaMS);
     this.balanceCounter.update(deltaMS);
+    this.totalWinCounter.update(deltaMS);
+    this.betCounter.update(deltaMS);
     this._updateFloatingSymbols();
   }
 
@@ -510,26 +554,36 @@ export class GameController {
     }
   }
 
-  /** Animate and reveal the Win: [amount] UI. */
-  private _showWinAmount(amount: number): void {
+  /**
+   * Animate and reveal the Win: [amount] UI.
+   *
+   * @param hitAmount     Payout from the current win / cascade step.
+   * @param totalSoFar    Accumulated payout for the entire spin (all cascades).
+   */
+  private _showWinAmount(hitAmount: number, totalSoFar: number): void {
     if (this.winDisplayFallbackTimer !== null) {
       clearTimeout(this.winDisplayFallbackTimer);
       this.winDisplayFallbackTimer = null;
     }
 
-    // TOTAL WIN (right panel): show amount immediately so it always displays
-    this.ui.totalWinText.text = amount.toFixed(2);
+    // TOTAL WIN (right panel): animate the accumulated amount for the whole spin.
+    // Use the currently displayed value as the start so mid-animation cascades
+    // continue smoothly instead of snapping to an intermediate total.
+    const from = this._totalWinDisplayValue;
+    const to = totalSoFar;
+    this.totalWinCounter.start(from, to);
     this.ui.totalWinText.alpha = 1;
     this.ui.totalWinText.visible = true;
 
-    this.ui.resultText.text = `WIN: 0.00${this.pendingBonusText}`;
+    this.ui.resultText.text = `WIN: ${GameController.formatAmount(0)}${this.pendingBonusText}`;
     console.log("pendingBonusText: " + this.pendingBonusText);
     this.ui.resultText.alpha = 0;
     this.ui.resultText.scale.set(0.65, 0.65);
     this.ui.resultText.visible = true;
 
-    this.winCounter.start(amount);
-    this.balanceCounter.start(amount);
+    // Count-up animations use only the current hit amount; TOTAL WIN shows the sum.
+    this.winCounter.start(hitAmount);
+    this.balanceCounter.start(hitAmount);
 
     this.tweenTo(
       this.ui.resultText.scale,
@@ -695,7 +749,7 @@ export class GameController {
       const startY = layerLocal.y;
 
       // target Y (exactly where you specified)
-      const targetY = startY - this.config.symbolSize * 0.9;
+      const targetY = startY - this.config.symbolSize * 0.5;
 
       // Clone the visible sprite (we only need the texture)
       const cloneTexture = cell.sprite.visible
@@ -705,8 +759,10 @@ export class GameController {
       clone.anchor.set(0.5);
       clone.x = startX;
       clone.y = startY;
+      const src = cell.sprite.visible ? cell.sprite : (cell as any)._animatedSprite;
+
       // keep same visual scale as source sprite
-      clone.scale.set(cell.sprite.scale.x, cell.sprite.scale.y);
+      clone.scale.copyFrom(src.scale);
       clone.alpha = 1;
       this.winFloatLayer.addChild(clone);
 
@@ -1026,6 +1082,8 @@ export class GameController {
 
     // STEP 8: Credit update (counters deferred until slice animation completes)
     if (totalPayout > 0) {
+      // Accumulate this hit into the per-spin total and credit the player's balance.
+      this.currentSpinTotalPayout += totalPayout;
       this._balanceAtWinStart = this.credits;
       this.addCredits(totalPayout);
 
@@ -1035,14 +1093,13 @@ export class GameController {
         : "";
 
       this.ui.resultText.text = "";
-      this.ui.totalWinText.text = "0.00";
 
       // Show WIN text and start counters immediately when a win is detected,
       // before any winning-symbol upward movement begins.
       if (this.pendingPayoutToShow !== null) {
         const amount = this.pendingPayoutToShow;
         this.pendingPayoutToShow = null;
-        this._showWinAmount(amount);
+        this._showWinAmount(amount, this.currentSpinTotalPayout);
       }
     }
 
@@ -1050,13 +1107,11 @@ export class GameController {
     if (totalPayout > 0) {
       // handled by _showWinAmount after slice animation completes
     } else if (spinsWonThisSpin > 0) {
-      this.ui.resultText.text   = `BONUS! ${spinsWonThisSpin} Free Spins!`;
-      this.ui.totalWinText.text = "0.00";
+      this.ui.resultText.text = `BONUS! ${spinsWonThisSpin} Free Spins!`;
       this.winCounter.cancel();
       this.balanceCounter.cancel();
     } else {
-      this.ui.resultText.text   = "";
-      this.ui.totalWinText.text = "0.00";
+      this.ui.resultText.text = "";
       this.winCounter.cancel();
       this.balanceCounter.cancel();
     }

@@ -136,8 +136,9 @@ export class Reel {
       const isAnimated = symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID;
 
       if (isAnimated) {
-        // Only re-apply if the symbol actually changed
-        if (cell.symbolId !== symbolId) {
+        // Ensure the cell is actually animated. On first load/refresh it's possible
+        // to have the right symbolId but still be showing the static texture.
+        if (cell.symbolId !== symbolId || !cell.hasAnimated()) {
           const frames = getAnimationFrames(symbolId);
           if (frames.length > 0) {
             cell.setAnimated(frames);

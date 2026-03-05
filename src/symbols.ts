@@ -5,6 +5,7 @@
  */
 
 import { Texture, Assets } from "pixi.js";
+import { WildSpriteSheet } from "./WildSpriteSheet";
 
 export const SYMBOL_ASSETS = [
   "/cherry.png",
@@ -15,7 +16,7 @@ export const SYMBOL_ASSETS = [
   "/lemonSlice.png",
   "/mangoSlice.png",
   "/orangeSlice.png",
-  "/wild_sheet.png",
+  "/try_wild.png",
   "/image_20-removebg-preview.png",
 ];
 
@@ -91,17 +92,23 @@ export function getWeightedRandomSymbol_noWild(): number {
 }
 
 export function getAnimationFrames(symbolId: number): Texture[] {
-  const key = symbolId === WILD_SYMBOL_ID ? "wild_sheet.json" : "scatter_sheet.json";
-  const sheet = Assets.get(key) ?? Assets.get(`/${key}`);
+  if (symbolId === WILD_SYMBOL_ID) {
+    try {
+      const sheet = WildSpriteSheet.getInstance();
+      return sheet.getAnimation("enemy");
+    } catch (err) {
+      console.warn("[getAnimationFrames] Wild sheet not ready:", err);
+      return [];
+    }
+  }
 
-  // ✅ Add this to debug in browser console
-  console.log(`[getAnimationFrames] symbolId=${symbolId} sheet=`, sheet);
+  const key = "scatter_sheet.json";
+  const sheet = Assets.get(key) ?? Assets.get(`/${key}`);
 
   if (sheet?.textures) {
     const frames = Object.keys(sheet.textures)
       .sort()
       .map((k: string) => sheet.textures[k] as Texture);
-    console.log(`[getAnimationFrames] frames found:`, frames.length);
     return frames;
   }
 

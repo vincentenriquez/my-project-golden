@@ -10,18 +10,19 @@ import {
   TextStyle,
 } from "pixi.js";
 import { SYMBOL_ASSETS, WILD_SYMBOL_ID } from "./symbols";
+import { WildSpriteSheet } from "./WildSpriteSheet";
 import { Reel } from "./Reel";
 import { GameController } from "./GameController";
 import { WinCountUp, CountUpCallback } from "./WinCountUp";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
-const REEL_WIDTH = 163;
-const SYMBOL_SIZE = 119;
+const REEL_WIDTH = 160;
+const SYMBOL_SIZE = 125;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
-const REEL_STRIP_LENGTH = 14;
-const BG_IMAGE = "Frame_17.png";
+const REEL_STRIP_LENGTH = 15;
+const BG_IMAGE = "try_again.png";
 const MIN_BET = 10;
 const MAX_BET = 1000000;
 const AUTO_SPIN_COUNT = 10;
@@ -40,7 +41,7 @@ document.body.appendChild(app.canvas);
 const gameContainer = new Container();
 app.stage.addChild(gameContainer);
 
-const frameTexture = await Assets.load("/Frame_4.png");
+const frameTexture = await Assets.load("/Final_Frame.png");
 const frameSprite = new Sprite(frameTexture);
 frameSprite.anchor.set(0.5);
 gameContainer.addChild(frameSprite);
@@ -160,7 +161,13 @@ let mask: Graphics;
 let gameController: GameController;
 
 // ---------- Load Assets ----------
-await Assets.load([...SYMBOL_ASSETS, BG_IMAGE, "/Frame_13.png", "/playBtnn.png", "/stopBtnn.png", "/wild_sheet.json"]);
+await Assets.load([
+  ...SYMBOL_ASSETS,
+  BG_IMAGE,
+  "/Frame_13.png",
+  "/playBtnn.png",
+  "/stopBtnn.png",
+]);
 const bgQuickBtn = Texture.from("/bgQuickBtn.png");
 const spinTexture = Texture.from("/Frame_13.png");
 const autoSpinPlay = Texture.from("/playBtnn.png");
@@ -168,12 +175,12 @@ const autoSpinStop = Texture.from("/stopBtnn.png");
 
 function onAssetsLoaded() {
   slotTextures = SYMBOL_ASSETS.map((url) => Texture.from(url));
-  // Ensure Wild's base texture is a single animation frame, not the full sheet image.
-  // The reel will then upgrade it to a looping AnimatedSprite via getAnimationFrames().
+  // Make the wild's "static" fallback a single frame (not the full 3×3 sheet),
+  // so it never appears tiny (sheet scaled down) on initial load/refresh.
   try {
-    slotTextures[WILD_SYMBOL_ID] = Texture.from("wild_00.png");
+    slotTextures[WILD_SYMBOL_ID] = WildSpriteSheet.getInstance().getFrame("wild_00.png");
   } catch {
-    // Fallback: keep existing texture; animation will still apply on reels.
+    // If something goes wrong, the reel will still try to upgrade to AnimatedSprite.
   }
   buildSlotMachine();
 }
@@ -207,7 +214,7 @@ function buildSlotMachine() {
   mask.drawRoundedRect(0, 0, frameWidth, frameHeight, 14);
   mask.endFill();
   mask.x = -frameWidth / 2;
-  mask.y = -frameHeight / 1.3;
+  mask.y = -frameHeight / 1.25;
   gameContainer.addChild(mask);
   reelContainer.mask = mask;
   reelContainer.x   = mask.x;
@@ -357,7 +364,7 @@ function buildSlotMachine() {
   balanceLabel.anchor.set(0.5);
   balanceContainer.addChild(balanceLabel);
 
-  const creditsText = new Text("1000.00", new TextStyle({
+  const creditsText = new Text("1,000.00", new TextStyle({
     fontSize: 30, fontWeight: "bold", align: "center", fill: 0xFDF1C0, fontFamily: "Arial", 
   }));
   creditsText.anchor.set(0.5);
@@ -423,7 +430,7 @@ function buildSlotMachine() {
   betText.anchor.set(0.5);
   betContainer.addChild(betText);
 
-  const amountLabel = new Text("10", new TextStyle({
+  const amountLabel = new Text("10.00", new TextStyle({
     fontSize: 30, fontWeight: "bold", align: "center", fontFamily: "Arial", fill: 0xFDF1C0,
   }));
   amountLabel.anchor.set(0.5);
@@ -494,7 +501,7 @@ function buildSlotMachine() {
   autoSpinText.anchor.set(0.5);
   autoSpinText.x = 0;
   autoSpinText.y = -155;
-  autoSpinText.visible = true;
+  autoSpinText.visible = false;
   spinStatusContainer.addChild(autoSpinText);
 
   const freeSpinText = new Text("FREE SPINS LEFT: 0", spinStatusStyle);
