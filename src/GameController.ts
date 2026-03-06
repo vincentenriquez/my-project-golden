@@ -4,6 +4,7 @@ import type { Reel } from "./Reel";
 import { WinCountUp } from "./WinCountUp";
 import { RangeCountUp } from "./RangeCountUp";
 import type { SymbolCell } from "./SymbolCell";
+import type { SlotInfoContainer } from "./SlotInfoContainer";
 import {
   TOTAL_SYMBOLS,
   WILD_SYMBOL_ID,
@@ -66,8 +67,7 @@ export interface GameControllerUI {
   creditsText: Text;
   resultText: Text;
   amountLabel: Text;
-  autoSpinText: Text;
-  freeSpinText: Text;
+  slotInfo: SlotInfoContainer;
   totalWinText: Text;
   dimOverlay: Graphics;
   autoSpinButton: Sprite;
@@ -169,6 +169,10 @@ export class GameController {
   /** Accumulates total payout across cascades within a single spin. */
   private currentSpinTotalPayout: number = 0;
   private running = false;
+  /** True while win sequence (symbol movement, cascades, WIN text) is in progress; blocks spin. */
+  private winLock = false;
+  /** Set true when symbol/cascade chain is done; release winLock when count-up is also done. */
+  private winSequenceSymbolsComplete = false;
   private freeSpinsRemaining = 0;
   private inFreeSpins = false;
   private autoSpinActive = false;
@@ -237,16 +241,11 @@ export class GameController {
     this._totalWinDisplayValue = 0;
 
     // ── Total Win count-up ────────────────────────────────────────────────
-    // Drives the "WIN: x.xx" result text (center). totalWinText is set directly in _showWinAmount.
+    // Drives the result text (center) with count-up amount and optional bonus suffix.
     this.winCounter = new WinCountUp((displayValue, isDone) => {
       const formatted = GameController.formatAmount(displayValue);
-      if (this.ui.resultText.text.startsWith("WIN: ")) {
-        const hasBonus = this.ui.resultText.text.includes("|");
-        const suffix   = hasBonus
-          ? " | " + this.ui.resultText.text.split("|")[1].trim()
-          : "";
-        this.ui.resultText.text = `WIN: ${formatted}${suffix}`;
-      }
+      this.ui.resultText.text = `${formatted}${this.pendingBonusText}`;
+      if (isDone) this._onWinDisplayComplete();
     });
 
     // ── TOTAL WIN (right panel) range count-up ────────────────────────────
@@ -291,7 +290,7 @@ export class GameController {
   getAutoSpinActive(): boolean { return this.autoSpinActive; }
   getAutoSpinsRemaining(): number { return this.autoSpinsRemaining; }
 
-  canSpin(): boolean { return !this.running && !this.autoSpinActive; }
+  canSpin(): boolean { return !this.running && !this.autoSpinActive && !this.winLock; }
   canStartAutoSpin(): boolean { return !this.running && !this.autoSpinActive && !this.inFreeSpins; }
 
   setBet(amount: number): void {
@@ -575,7 +574,7 @@ export class GameController {
     this.ui.totalWinText.alpha = 1;
     this.ui.totalWinText.visible = true;
 
-    this.ui.resultText.text = `WIN: ${GameController.formatAmount(0)}${this.pendingBonusText}`;
+    this.ui.resultText.text = `${GameController.formatAmount(0)}${this.pendingBonusText}`;
     console.log("pendingBonusText: " + this.pendingBonusText);
     this.ui.resultText.alpha = 0;
     this.ui.resultText.scale.set(0.65, 0.65);
@@ -1068,10 +1067,8 @@ export class GameController {
           this.autoSpinActive = false;
           this.ui.autoSpinButton.visible = true;
           this.ui.stopAutoSpinButton.visible = false;
-          this.ui.autoSpinText.text = "AUTO SPINS: 0";
         }
-        this.ui.freeSpinText.text = `FREE SPINS LEFT: ${spinsWon}`;
-        this.ui.freeSpinText.visible = true;
+        this.ui.slotInfo.setFreeSpin(this.freeSpinsRemaining);
         this.freeSpinsRemaining += spinsWon;
         this.inFreeSpins = true;
       }
@@ -1082,6 +1079,8 @@ export class GameController {
 
     // STEP 8: Credit update (counters deferred until slice animation completes)
     if (totalPayout > 0) {
+      this.winLock = true;
+      this.winSequenceSymbolsComplete = false;
       // Accumulate this hit into the per-spin total and credit the player's balance.
       this.currentSpinTotalPayout += totalPayout;
       this._balanceAtWinStart = this.credits;
@@ -1143,34 +1142,54 @@ export class GameController {
   // ─────────────────────────────────────────────────────────────────────────
 
   private _resolveSpinContinuation(): void {
+    this.winSequenceSymbolsComplete = true;
+
     if (this.inFreeSpins) {
       if (this.freeSpinsRemaining > 0) {
         this.freeSpinsRemaining--;
-        this.ui.freeSpinText.text = `Free spins: ${this.freeSpinsRemaining}`;
+        this.ui.slotInfo.setFreeSpinCount(this.freeSpinsRemaining);
         setTimeout(() => {
           const result = this.generateResult({ weighted: true });
           this.spinToResult(result);
         }, 400);
       } else {
         this.inFreeSpins = false;
-        this.ui.freeSpinText.visible = false;
+        this.ui.slotInfo.setDefault();
         this.ui.resultText.text = "Bonus finished!";
         if (this.autoSpinsRemaining > 0) {
           this.endAutoSpin();
           this.ui.resultText.text = "Bonus finished! Auto spin stopped.";
         }
+        this._tryReleaseWinLock();
       }
       return;
     }
 
     if (this.autoSpinActive) {
       this.autoSpinsRemaining--;
-      this.ui.autoSpinText.text = `AUTO SPINS: ${this.autoSpinsRemaining}`;
+      this.ui.slotInfo.setAutoSpin(this.autoSpinsRemaining);
       if (this.autoSpinsRemaining <= 0) {
         this.endAutoSpin();
+        this._tryReleaseWinLock();
         return;
       }
       if (this.onAutoSpinContinue) this.onAutoSpinContinue();
+    }
+    this._tryReleaseWinLock();
+  }
+
+  /** Release spin lock when both symbol sequence and WIN count-up are complete. */
+  private _onWinDisplayComplete(): void {
+    this._tryReleaseWinLock();
+  }
+
+  private _tryReleaseWinLock(): void {
+    if (
+      this.winLock &&
+      this.winSequenceSymbolsComplete &&
+      !this.winCounter.isActive
+    ) {
+      this.winLock = false;
     }
   }
 
@@ -1324,9 +1343,7 @@ export class GameController {
     this.autoSpinsRemaining = count;
     this.ui.autoSpinButton.visible = false;
     this.ui.stopAutoSpinButton.visible = true;
-    this.ui.autoSpinText.text = `AUTO SPINS: ${this.autoSpinsRemaining}`;
-    this.ui.autoSpinText.visible = true;
-    this.ui.freeSpinText.visible = false;
+    this.ui.slotInfo.setAutoSpin(this.autoSpinsRemaining);
   }
 
   cancelAutoSpin(): void {
@@ -1340,7 +1357,7 @@ export class GameController {
     this.autoSpinsRemaining = 0;
     this.ui.autoSpinButton.visible = true;
     this.ui.stopAutoSpinButton.visible = false;
-    this.ui.autoSpinText.visible = false;
+    this.ui.slotInfo.setDefault();
   }
 
   runNextAutoSpin(): void {

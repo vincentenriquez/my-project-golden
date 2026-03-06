@@ -9,11 +9,13 @@ import {
   Text,
   TextStyle,
 } from "pixi.js";
-import { SYMBOL_ASSETS, WILD_SYMBOL_ID } from "./symbols";
+import { SYMBOL_ASSETS, WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "./symbols";
 import { WildSpriteSheet } from "./WildSpriteSheet";
+import { ScatterSpriteSheet } from "./ScatterSpriteSheet";
 import { Reel } from "./Reel";
 import { GameController } from "./GameController";
 import { WinCountUp, CountUpCallback } from "./WinCountUp";
+import { SlotInfoContainer } from "./SlotInfoContainer";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
@@ -163,24 +165,32 @@ let gameController: GameController;
 // ---------- Load Assets ----------
 await Assets.load([
   ...SYMBOL_ASSETS,
+  "/scatter_spritesheet.png",
+  "/win_container.png",
+  "/bgQuickBtn.png",
   BG_IMAGE,
   "/Frame_13.png",
   "/playBtnn.png",
   "/stopBtnn.png",
 ]);
 const bgQuickBtn = Texture.from("/bgQuickBtn.png");
+const winContainerTexture = Texture.from("/win_container.png");
 const spinTexture = Texture.from("/Frame_13.png");
 const autoSpinPlay = Texture.from("/playBtnn.png");
 const autoSpinStop = Texture.from("/stopBtnn.png");
 
 function onAssetsLoaded() {
   slotTextures = SYMBOL_ASSETS.map((url) => Texture.from(url));
-  // Make the wild's "static" fallback a single frame (not the full 3×3 sheet),
-  // so it never appears tiny (sheet scaled down) on initial load/refresh.
+  // Make wild/scatter "static" fallback a single frame (not the full sheet).
   try {
     slotTextures[WILD_SYMBOL_ID] = WildSpriteSheet.getInstance().getFrame("wild_00.png");
   } catch {
     // If something goes wrong, the reel will still try to upgrade to AnimatedSprite.
+  }
+  try {
+    slotTextures[SCATTER_SYMBOL_ID] = ScatterSpriteSheet.getInstance().getFrame("scatter_00.png");
+  } catch {
+    // Scatter will use SYMBOL_ASSETS fallback or upgrade when sheet is ready.
   }
   buildSlotMachine();
 }
@@ -282,8 +292,23 @@ function buildSlotMachine() {
   gameContainer.addChild(dimOverlay);
 
   // ── Result text ─────────────────────────────────────────────────────────────
+  const resultTextContainer = new Container();
+  resultTextContainer.x = 0;
+  resultTextContainer.y = mask.y + frameHeight / 2 - 200;
+  resultTextContainer.zIndex = 10;
+  overlayLayer.addChild(resultTextContainer);
+
+  // Background image for resultText (auto-sizes to text)
+  const resultBg = new Sprite(winContainerTexture);
+  resultBg.anchor.set(0.5);
+  resultBg.x = 0;
+  resultBg.y = 0;
+  resultBg.width = 0;
+  resultBg.height = 50;
+  resultTextContainer.addChild(resultBg);
+
   const resultText = new Text("", new TextStyle({
-    fontSize: 48,
+    fontSize: 20,
     fontWeight: "bold",
     fill: 0xffd700,
     stroke: 0x000000,
@@ -291,9 +316,8 @@ function buildSlotMachine() {
   }));
   resultText.anchor.set(0.5);
   resultText.x = 0;
-  resultText.y = mask.y + frameHeight / 2;
-  resultText.zIndex = 10;
-  overlayLayer.addChild(resultText);
+  resultText.y = 0;
+  resultTextContainer.addChild(resultText);
 
   // ── Spin button ─────────────────────────────────────────────────────────────
   const SPIN_BTN_SIZE = 150;
@@ -304,7 +328,7 @@ function buildSlotMachine() {
   spinButton.width  = SPIN_BTN_SIZE;
   spinButton.height = SPIN_BTN_SIZE;
   spinButton.x = 0;
-  spinButton.y = mask.y + frameHeight + 323;
+  spinButton.y = mask.y + frameHeight + 385;
   spinButton.eventMode = "static";
   spinButton.cursor = "pointer";
   spinButton.zIndex = 100;
@@ -355,7 +379,7 @@ function buildSlotMachine() {
   // Balance
   const balanceContainer = new Container();
   balanceContainer.x = -215;
-  balanceContainer.y = 40;
+  balanceContainer.y = 87;
   controlsContainer.addChild(balanceContainer);
 
   const balanceLabel = new Text("BALANCE", new TextStyle({
@@ -375,7 +399,7 @@ function buildSlotMachine() {
   // Total win
   const totalWinContainer = new Container();
   totalWinContainer.x = 215;
-  totalWinContainer.y = 40;
+  totalWinContainer.y = 87;
   controlsContainer.addChild(totalWinContainer);
 
   const totalWinLabel = new Text("TOTAL WIN", new TextStyle({
@@ -402,7 +426,7 @@ function buildSlotMachine() {
   autoSpinButton.eventMode = "static";
   autoSpinButton.cursor = "pointer";
   autoSpinButton.x = 274;
-  autoSpinButton.y = 198;
+  autoSpinButton.y = 261;
   spinRowContainer.addChild(autoSpinButton);
 
   const stopAutoSpinButton = new Sprite(autoSpinStop);
@@ -416,12 +440,12 @@ function buildSlotMachine() {
   // Bet controls
   const betControlsContainer = new Container();
   betControlsContainer.x = 0;
-  betControlsContainer.y = 40;
+  betControlsContainer.y = 95;
   controlsContainer.addChild(betControlsContainer);
 
   const betContainer = new Container();
   betContainer.x = 0;
-  betContainer.y = 148;
+  betContainer.y = 200;
   controlsContainer.addChild(betContainer);
 
   const betText = new Text("BET", new TextStyle({
@@ -487,40 +511,29 @@ function buildSlotMachine() {
   plusText.y = BTN_SIZE / 2;
   plusButton.addChild(plusText);
 
-  // Spin status (auto / free spin counters)
+  // Spin status / info container (unified display with typing animation in default state)
   const spinStatusContainer = new Container();
   spinStatusContainer.x = 0;
   spinStatusContainer.y = -280;
   controlsContainer.addChild(spinStatusContainer);
 
-  const spinStatusStyle = new TextStyle({
-    fontSize: 20, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
+  const slotInfo = new SlotInfoContainer({
+    x: 0,
+    y: -180,
+    textStyle: { fontSize: 25, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial", wordWrap: true, wordWrapWidth: 700 },
   });
-
-  const autoSpinText = new Text("AUTO SPINS: 0", spinStatusStyle);
-  autoSpinText.anchor.set(0.5);
-  autoSpinText.x = 0;
-  autoSpinText.y = -155;
-  autoSpinText.visible = false;
-  spinStatusContainer.addChild(autoSpinText);
-
-  const freeSpinText = new Text("FREE SPINS LEFT: 0", spinStatusStyle);
-  freeSpinText.anchor.set(0.5);
-  freeSpinText.x = 0;
-  freeSpinText.y = -155;
-  freeSpinText.visible = false;
-  spinStatusContainer.addChild(freeSpinText);
+  spinStatusContainer.addChild(slotInfo.container as Container);
 
   // Quick bet buttons
   const bgQuickBtnSprite = new Sprite(bgQuickBtn);
   bgQuickBtnSprite.anchor.set(0.5);
   bgQuickBtnSprite.x = 0;
-  bgQuickBtnSprite.y = ROW_GAP * 5 + 135;
+  bgQuickBtnSprite.y = ROW_GAP * 5 + 225;
   controlsContainer.addChild(bgQuickBtnSprite);
 
   const quickBetContainer = new Container();
   quickBetContainer.x = 0;
-  quickBetContainer.y = ROW_GAP * 5 + 135;
+  quickBetContainer.y = ROW_GAP * 5 + 225;
   controlsContainer.addChild(quickBetContainer);
 
   const quickBets   = [10, 50, 100];
@@ -607,7 +620,7 @@ function buildSlotMachine() {
   gameController = new GameController(
     reels,
     controllerConfig,
-    { creditsText, resultText, amountLabel, autoSpinText, freeSpinText, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
+    { creditsText, resultText, amountLabel, slotInfo, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
     highlightLayer,
     winFloatLayer,         // ← pass the new layer
     tweenTo,
@@ -661,6 +674,27 @@ function buildSlotMachine() {
     gameController.updateReelsVisuals();
     // ↓ Pass BOTH deltaTime (for glow/float) and deltaMS (for win count-up)
     gameController.updateHighlightAnimation(ticker.deltaTime, ticker.deltaMS);
+    // Spin lock: disable spin button during win sequence (symbol movement, cascades, WIN text)
+    const canSpin = gameController.canSpin();
+    spinButton.eventMode = canSpin ? "static" : "none";
+    spinButton.alpha = canSpin ? 1 : 0.6;
+    spinButton.cursor = canSpin ? "pointer" : "not-allowed";
+    if (spinLabel) {
+      spinLabel.alpha = canSpin ? 1 : 0.6;
+    }
+
+    // Result text background: show/hide together and fit to current text size.
+    const showResult = resultText.visible && resultText.text.trim().length > 0;
+    resultTextContainer.visible = showResult;
+    resultBg.alpha = resultText.alpha;
+    if (showResult) {
+      const PAD_X = 15;
+      const PAD_Y = 10;
+      const minW = 100;
+      const minH = 50;
+      resultBg.width = Math.max(minW, resultText.width + PAD_X * 2);
+      resultBg.height = Math.max(minH, resultText.height + PAD_Y * 2);
+    }
   });
 
   console.log("Slot machine built.");

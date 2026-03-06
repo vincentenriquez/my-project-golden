@@ -4,8 +4,9 @@
  * Encapsulates: symbol IDs, weights, paytables, and weighted RNG.
  */
 
-import { Texture, Assets } from "pixi.js";
+import { Texture } from "pixi.js";
 import { WildSpriteSheet } from "./WildSpriteSheet";
+import { ScatterSpriteSheet } from "./ScatterSpriteSheet";
 
 export const SYMBOL_ASSETS = [
   "/cherry.png",
@@ -17,7 +18,7 @@ export const SYMBOL_ASSETS = [
   "/mangoSlice.png",
   "/orangeSlice.png",
   "/try_wild.png",
-  "/image_20-removebg-preview.png",
+  "/scatter_spritesheet.png",
 ];
 
 export const TOTAL_SYMBOLS = 10;
@@ -102,16 +103,15 @@ export function getAnimationFrames(symbolId: number): Texture[] {
     }
   }
 
-  const key = "scatter_sheet.json";
-  const sheet = Assets.get(key) ?? Assets.get(`/${key}`);
-
-  if (sheet?.textures) {
-    const frames = Object.keys(sheet.textures)
-      .sort()
-      .map((k: string) => sheet.textures[k] as Texture);
-    return frames;
+  if (symbolId === SCATTER_SYMBOL_ID) {
+    try {
+      const sheet = ScatterSpriteSheet.getInstance();
+      return sheet.getAnimation("scatter");
+    } catch (err) {
+      console.warn("[getAnimationFrames] Scatter sheet not ready:", err);
+      return [];
+    }
   }
 
-  console.warn(`[getAnimationFrames] No textures found for symbolId=${symbolId}`);
   return [];
 }
