@@ -1,21 +1,24 @@
 // symbols.ts
-
 /**
  * Symbol configuration and paytable logic.
  * Encapsulates: symbol IDs, weights, paytables, and weighted RNG.
  */
 
+import { Texture } from "pixi.js";
+import { WildSpriteSheet } from "./WildSpriteSheet";
+import { ScatterSpriteSheet } from "./ScatterSpriteSheet";
+
 export const SYMBOL_ASSETS = [
   "/cherry.png",
-  "/lemon.png",
-  "/orange.png",
-  "/plum.png",
-  "/grape.png",
-  "/watermelon.png",
-  "/mango.png",
   "/strawberry.png",
-  "/wild.png",
-  "/scatter.png",
+  "/watermelonSlice.png",
+  "/plums.png",
+  "/grapes.png",
+  "/lemonSlice.png",
+  "/mangoSlice.png",
+  "/orangeSlice.png",
+  "/try_wild.png",
+  "/scatter_spritesheet.png",
 ];
 
 export const TOTAL_SYMBOLS = 10;
@@ -36,16 +39,17 @@ export const SYMBOL_WEIGHTS: number[] = [
 /** Paytable: [symbolId][count] => payout multiplier per bet */
 export const PAYTABLE: number[][] = [
   [0, 0, 4, 14, 60, 200],   // 0 cherry
-  [0, 0, 4, 12, 50, 180],   // 1 lemon
-  [0, 0, 3, 10, 40, 160],   // 2 orange
+  [0, 0, 4, 12, 50, 180],   // 1 strawberry
+  [0, 0, 3, 10, 40, 160],   // 2 watermelon 
   [0, 0, 3, 8, 35, 140],    // 3 plum
   [0, 0, 2, 6, 30, 120],    // 4 grape
-  [0, 0, 2, 5, 25, 100],    // 5 watermelon
+  [0, 0, 2, 5, 25, 100],    // 5 lemon
   [0, 0, 6, 25, 90, 300],   // 6 mango (high)
-  [0, 0, 8, 30, 120, 400],  // 7 strawberry (high)
+  [0, 0, 8, 30, 120, 400],  // 7 orange (high)
   [0, 0, 10, 50, 250, 500], // 8 wild (highest-paying symbol)
   [0, 0, 0, 2, 8, 30],      // 9 scatter (paid via SCATTER_PAYTABLE)
 ];
+
 
 /**
  * Scatter: pays by total count anywhere on reels (position independent).
@@ -72,4 +76,42 @@ export function getWeightedRandomSymbol(): number {
     if (rand <= cumulative) return i;
   }
   return SYMBOL_WEIGHTS.length - 1;
+}
+
+// In symbols.ts — add this helper
+export function getWeightedRandomSymbol_noWild(): number {
+  const weights = [...SYMBOL_WEIGHTS];
+  weights[WILD_SYMBOL_ID] = 0;
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  const rand = Math.random() * totalWeight;
+  let cumulative = 0;
+  for (let i = 0; i < weights.length; i++) {
+    cumulative += weights[i];
+    if (rand <= cumulative) return i;
+  }
+  return 0;
+}
+
+export function getAnimationFrames(symbolId: number): Texture[] {
+  if (symbolId === WILD_SYMBOL_ID) {
+    try {
+      const sheet = WildSpriteSheet.getInstance();
+      return sheet.getAnimation("enemy");
+    } catch (err) {
+      console.warn("[getAnimationFrames] Wild sheet not ready:", err);
+      return [];
+    }
+  }
+
+  if (symbolId === SCATTER_SYMBOL_ID) {
+    try {
+      const sheet = ScatterSpriteSheet.getInstance();
+      return sheet.getAnimation("scatter");
+    } catch (err) {
+      console.warn("[getAnimationFrames] Scatter sheet not ready:", err);
+      return [];
+    }
+  }
+
+  return [];
 }

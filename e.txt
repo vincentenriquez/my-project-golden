@@ -79,3 +79,16 @@ Tom task
 -Double check the ways and wild
 -Adjancency rule
 -Highlight the 
+
+If there's 3 scatter,  the 10 free spins triggered. When the 10 free spins triggered, I want to collect the total win within that 10 free spins(show it below of "TOTAL WIN").
+
+If
+
+I want to apply the spritesheet in my wild symbol and scatter symbol to make it animated. Can you guide me? Give me the step by step. Please be informed that the second pasted file is the example code for spritesheet and also I'm using typescript and PixiJs.
+
+Reel 1
+cherry
+
+Analyze my codebase
+
+Review my codebase and modify the logic so that the “WIN:” text is displayed simultaneously with the winning combination animation. The text should not appear before or after the animation—it must be synchronized with it.
