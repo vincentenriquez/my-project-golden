@@ -1,8 +1,8 @@
 //Reel.ts
 import { Container, Sprite, Texture, BlurFilter } from "pixi.js";
 import { SymbolCell } from "./SymbolCell";
-import { getAnimationFrames } from "./symbols";
-import { WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "./symbols";
+import { WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "../../domain/symbolConfig";
+import { getAnimationFrames } from "./symbolAnimations";
 
 export interface ReelConfig {
   reelWidth:      number;

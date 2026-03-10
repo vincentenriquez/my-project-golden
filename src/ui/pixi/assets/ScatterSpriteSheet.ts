@@ -115,7 +115,7 @@ export class ScatterSpriteSheet {
   public createAnimatedSprite(
     animationName = "scatter",
     animationSpeed = 0.15,
-    delay = 2,
+    delaySeconds = 0,
     loop = true
   ): AnimatedSprite {
     const frames = this.getAnimation(animationName);
@@ -123,8 +123,12 @@ export class ScatterSpriteSheet {
     sprite.anchor.set(0.5);
     sprite.animationSpeed = animationSpeed;
     sprite.loop = loop;
-    sprite.animationSpeed = delay;
-    sprite.play();
+    if (delaySeconds > 0) {
+      sprite.stop();
+      setTimeout(() => sprite.play(), delaySeconds * 1000);
+    } else {
+      sprite.play();
+    }
     return sprite;
   }
 }

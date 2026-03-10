@@ -1,12 +1,5 @@
-// symbols.ts
-/**
- * Symbol configuration and paytable logic.
- * Encapsulates: symbol IDs, weights, paytables, and weighted RNG.
- */
-
-import { Texture } from "pixi.js";
-import { WildSpriteSheet } from "./WildSpriteSheet";
-import { ScatterSpriteSheet } from "./ScatterSpriteSheet";
+// symbolConfig.ts
+// Pure symbol configuration, paytables, and weighted RNG helpers (no Pixi imports).
 
 export const SYMBOL_ASSETS = [
   "/cherry.png",
@@ -14,9 +7,9 @@ export const SYMBOL_ASSETS = [
   "/watermelonSlice.png",
   "/plums.png",
   "/grapes.png",
-  "/lemonSlice.png",
-  "/mangoSlice.png",
-  "/orangeSlice.png",
+  "/scatter_spritesheet.png",
+  "/scatter_spritesheet.png",
+  "/scatter_spritesheet.pngg",
   "/try_wild.png",
   "/scatter_spritesheet.png",
 ];
@@ -47,17 +40,18 @@ export const PAYTABLE: number[][] = [
   [0, 0, 6, 25, 90, 300],   // 6 mango (high)
   [0, 0, 8, 30, 120, 400],  // 7 orange (high)
   [0, 0, 10, 50, 250, 500], // 8 wild (highest-paying symbol)
-  [0, 0, 0, 2, 8, 30],      // 9 scatter (paid via SCATTER_PAYTABLE)
+  [0, 0, 0, 0, 0, 0],       // 9 scatter (no line payout)
 ];
-
 
 /**
  * Scatter: pays by total count anywhere on reels (position independent).
  * Payout = SCATTER_PAYTABLE[count] × bet. Min 3 scatters for payout/bonus.
  */
-export const SCATTER_PAYTABLE: Record<number, number> = {
-  0: 0, 1: 0, 2: 0, 3: 2, 4: 10, 5: 50, 6: 200,
-};
+// NOTE: Scatter symbols no longer produce a direct payout.
+// SCATTER_PAYTABLE is kept commented-out for reference only.
+// export const SCATTER_PAYTABLE: Record<number, number> = {
+//   0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0,
+// };
 
 /** Scatter count -> free spins awarded (retrigger during bonus uses same table). */
 export const FREE_SPINS_AWARDED: Record<number, number> = {
@@ -78,7 +72,10 @@ export function getWeightedRandomSymbol(): number {
   return SYMBOL_WEIGHTS.length - 1;
 }
 
-// In symbols.ts — add this helper
+/**
+ * Weighted random symbol picker that never returns the wild symbol.
+ * Useful for balancing reels that should not contain wilds.
+ */
 export function getWeightedRandomSymbol_noWild(): number {
   const weights = [...SYMBOL_WEIGHTS];
   weights[WILD_SYMBOL_ID] = 0;
@@ -92,26 +89,3 @@ export function getWeightedRandomSymbol_noWild(): number {
   return 0;
 }
 
-export function getAnimationFrames(symbolId: number): Texture[] {
-  if (symbolId === WILD_SYMBOL_ID) {
-    try {
-      const sheet = WildSpriteSheet.getInstance();
-      return sheet.getAnimation("enemy");
-    } catch (err) {
-      console.warn("[getAnimationFrames] Wild sheet not ready:", err);
-      return [];
-    }
-  }
-
-  if (symbolId === SCATTER_SYMBOL_ID) {
-    try {
-      const sheet = ScatterSpriteSheet.getInstance();
-      return sheet.getAnimation("scatter");
-    } catch (err) {
-      console.warn("[getAnimationFrames] Scatter sheet not ready:", err);
-      return [];
-    }
-  }
-
-  return [];
-}

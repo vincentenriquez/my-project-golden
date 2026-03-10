@@ -9,12 +9,28 @@ import {
   Text,
   TextStyle,
 } from "pixi.js";
-import { SYMBOL_ASSETS, WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "./symbols";
-import { WildSpriteSheet } from "./WildSpriteSheet";
-import { ScatterSpriteSheet } from "./ScatterSpriteSheet";
+import { SYMBOL_ASSETS, WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "../../domain/symbolConfig";
+import { WildSpriteSheet } from "./assets/WildSpriteSheet";
+import { ScatterSpriteSheet } from "./assets/ScatterSpriteSheet";
 import { Reel } from "./Reel";
-import { GameController } from "./GameController";
-import { WinCountUp, CountUpCallback } from "./WinCountUp";
+import { GameController } from "../../app/GameController";
+import type { IGameSession, ISpinEvaluator, ISpinResultGenerator } from "../../app/ports";
+import type { GameEvent } from "../../app/events";
+import { GameSession } from "../../domain/GameSession";
+import { DefaultSymbolPicker } from "../../domain/DefaultSymbolPicker";
+import type { ISymbolPicker } from "../../domain/ports";
+import { SpinResultGeneratorAdapter } from "../../app/SpinResultGeneratorAdapter";
+import { SpinEvaluatorAdapter } from "../../app/SpinEvaluatorAdapter";
+import { PixiReelsPort } from "./PixiReelsPort";
+import { PixiWinAnimator } from "./PixiWinAnimator";
+import { RangeCountUp } from "../shared/RangeCountUp";
+import {
+  PixiAutoSpinButtonsView,
+  PixiDimOverlayView,
+  PixiSlotInfoView,
+  PixiTextView,
+} from "./GameViews";
+import { WinCountUp } from "../shared/WinCountUp";
 import { SlotInfoContainer } from "./SlotInfoContainer";
 import { gsap } from "gsap";
 
@@ -161,6 +177,247 @@ let slotTextures: Texture[] = [];
 let reelContainer: Container;
 let mask: Graphics;
 let gameController: GameController;
+let reelsPort: PixiReelsPort;
+let winAnimator: PixiWinAnimator;
+let uiTick: ((deltaTime: number, deltaMS: number) => void) | null = null;
+
+// ---------- Helper: GameController factory (composition root: DDD + SOLID) ----------
+function createGameControllerInstance(
+  reels: Reel[],
+  controllerConfig: {
+    reelsCount: number;
+    symbolsPerReel: number;
+    reelWidth: number;
+    symbolSize: number;
+    minBet: number;
+    maxBet: number;
+    initialCredits: number;
+    initialBet: number;
+    autoSpinCount: number;
+  },
+  uiDeps: {
+    creditsText: Text;
+    resultText: Text;
+    amountLabel: Text;
+    slotInfo: SlotInfoContainer;
+    totalWinText: Text;
+    dimOverlay: Graphics;
+    autoSpinButton: Sprite;
+    stopAutoSpinButton: Sprite;
+  },
+  highlightLayer: Container,
+  winFloatLayer: Container
+): GameController {
+  const session: IGameSession = new GameSession({
+    initialCredits: controllerConfig.initialCredits,
+    initialBet: controllerConfig.initialBet,
+    minBet: controllerConfig.minBet,
+    maxBet: controllerConfig.maxBet,
+  });
+  const symbolPicker: ISymbolPicker = new DefaultSymbolPicker();
+  const spinEvaluator: ISpinEvaluator = new SpinEvaluatorAdapter();
+  const spinResultGenerator: ISpinResultGenerator = new SpinResultGeneratorAdapter(
+    {
+      reelsCount: controllerConfig.reelsCount,
+      symbolsPerReel: controllerConfig.symbolsPerReel,
+      wildAllowedReelIndices: new Set([1, 2, 3]),
+    },
+    symbolPicker
+  );
+  const dimOverlayView = new PixiDimOverlayView(uiDeps.dimOverlay);
+  reelsPort = new PixiReelsPort(
+    reels,
+    controllerConfig.symbolsPerReel,
+    tweenTo,
+    bounceOut,
+    () => symbolPicker.pick()
+  );
+  winAnimator = new PixiWinAnimator(
+    reels,
+    highlightLayer,
+    winFloatLayer,
+    tweenTo,
+    (visible) => dimOverlayView.setVisible(visible)
+  );
+  const controller = new GameController(
+    controllerConfig,
+    session,
+    spinEvaluator,
+    spinResultGenerator
+  );
+
+  // HUD views/adapters (UI-owned)
+  const creditsView = new PixiTextView(uiDeps.creditsText);
+  const resultView = new PixiTextView(uiDeps.resultText);
+  const betView = new PixiTextView(uiDeps.amountLabel);
+  const slotInfoView = new PixiSlotInfoView(uiDeps.slotInfo);
+  const totalWinView = new PixiTextView(uiDeps.totalWinText);
+  const autoSpinButtonsView = new PixiAutoSpinButtonsView(
+    uiDeps.autoSpinButton,
+    uiDeps.stopAutoSpinButton
+  );
+
+  // Formatting helper (UI-owned)
+  const formatAmount = (value: number): string => {
+    const [intPart, decPart] = value.toFixed(2).split(".");
+    const withSeparators = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return `${withSeparators}.${decPart}`;
+  };
+
+  // HUD animators (UI-owned)
+  let pendingBonusText = "";
+  let balanceAtWinStart = controller.getCredits();
+  let totalWinDisplayValue = 0;
+  let betDisplayValue = controller.getBet();
+
+  const winCountUp = new WinCountUp((displayValue, isDone) => {
+    resultView.setText(`${formatAmount(displayValue)}${pendingBonusText}`);
+    if (isDone) controller.onWinDisplayFinished();
+  });
+  const balanceCountUp = new WinCountUp((displayValue) => {
+    creditsView.setText(formatAmount(balanceAtWinStart + displayValue));
+  });
+  const totalWinCountUp = new RangeCountUp((displayValue) => {
+    totalWinDisplayValue = displayValue;
+    totalWinView.setText(formatAmount(displayValue));
+  });
+  const betCountUp = new RangeCountUp((displayValue) => {
+    betDisplayValue = displayValue;
+    betView.setText(formatAmount(displayValue));
+  });
+
+  // Subscribe to app events and drive PIXI/UI.
+  controller.subscribe((event: GameEvent) => {
+    switch (event.type) {
+      case "SpinBlocked": {
+        if (event.reason === "insufficientCredits") {
+          resultView.setText("Not enough credits!");
+        }
+        break;
+      }
+      case "CreditsChanged": {
+        if (event.animate) {
+          balanceAtWinStart = event.from;
+          balanceCountUp.start(event.to - event.from);
+        } else {
+          creditsView.setText(formatAmount(event.to));
+        }
+        break;
+      }
+      case "BetChanged": {
+        betCountUp.start(betDisplayValue, event.to);
+        break;
+      }
+      case "TotalWinChanged": {
+        if (event.animate) {
+          totalWinCountUp.start(totalWinDisplayValue, event.totalSoFar);
+        } else {
+          totalWinDisplayValue = event.totalSoFar;
+          totalWinView.setText(formatAmount(event.totalSoFar));
+        }
+        break;
+      }
+      case "ResultTextChanged": {
+        pendingBonusText = "";
+        winCountUp.cancel();
+        resultView.setText(event.text);
+        break;
+      }
+      case "WinAmountAwarded": {
+        pendingBonusText = event.bonusText;
+        resultView.setText(`${formatAmount(0)}${pendingBonusText}`);
+        resultView.alpha = 0;
+        resultView.scale = { x: 0.65, y: 0.65 };
+        resultView.visible = true;
+        tweenTo(
+          resultView.scale,
+          "x",
+          1,
+          450,
+          backout(1.4),
+          () => { resultView.scale.y = resultView.scale.x; }
+        );
+        tweenTo(resultView, "alpha", 1, 320, (t) => 1 - Math.pow(1 - t, 2));
+
+        winCountUp.start(event.hitAmount);
+        break;
+      }
+      case "AutoSpinChanged": {
+        if (event.active) {
+          autoSpinButtonsView.showStop();
+          slotInfoView.setAutoSpin(event.remaining);
+        } else {
+          autoSpinButtonsView.showStart();
+          if (!controller.getInFreeSpins()) slotInfoView.setDefault();
+        }
+        break;
+      }
+      case "FreeSpinsChanged": {
+        if (event.mode === "ended") slotInfoView.setDefault();
+        else if (event.mode === "entered") slotInfoView.setFreeSpin(event.remaining);
+        else slotInfoView.setFreeSpinCount(event.remaining);
+        break;
+      }
+      case "SpinToResultRequested": {
+        // Visual-only: rotate the spin button (if present elsewhere in scope).
+        reelsPort.clearVisualOverrides();
+        winAnimator.clear();
+        reelsPort.spinToResult(event.resultPerReel, () => {
+          const matrix = reelsPort.getVisibleMatrix(controllerConfig.symbolsPerReel);
+          controller.onSpinStopped(matrix);
+        });
+        break;
+      }
+      case "WinSequenceRequested": {
+        winAnimator.startWinSequence(
+          { symbolSize: controllerConfig.symbolSize },
+          event.winningPositions,
+          () => controller.onWinSequenceFinished()
+        );
+        break;
+      }
+      case "CascadeRequested": {
+        reelsPort.cascade(
+          {
+            reelsCount: controllerConfig.reelsCount,
+            symbolsPerReel: controllerConfig.symbolsPerReel,
+            symbolSize: controllerConfig.symbolSize,
+          },
+          event.winningPositions,
+          () => {
+            const matrix = reelsPort.getVisibleMatrix(controllerConfig.symbolsPerReel);
+            controller.onCascadeFinished(matrix);
+          }
+        );
+        break;
+      }
+      case "RequestNextSpin": {
+        setTimeout(() => {
+          controller.requestSpin(event.reason === "freeSpin" ? "free" : "auto");
+        }, event.afterMs);
+        break;
+      }
+    }
+  });
+
+  // Initial HUD render
+  creditsView.setText(formatAmount(controller.getCredits()));
+  betView.setText(formatAmount(controller.getBet()));
+  totalWinView.setText("0.00");
+  dimOverlayView.setVisible(false);
+  resultView.setText("");
+
+  // Expose ticker updates via closure for main ticker.
+  uiTick = (deltaTime: number, deltaMS: number) => {
+    winAnimator.update(deltaTime);
+    winCountUp.update(deltaMS);
+    balanceCountUp.update(deltaMS);
+    totalWinCountUp.update(deltaMS);
+    betCountUp.update(deltaMS);
+  };
+
+  return controller;
+}
 
 // ---------- Load Assets ----------
 await Assets.load([
@@ -559,7 +816,6 @@ function buildSlotMachine() {
       let newBet = gameController.getBet() + amount;
       if (newBet > MAX_BET) newBet = MAX_BET;
       gameController.setBet(newBet);
-      gameController.updateBetDisplay();
     });
     quickBetContainer.addChild(btn);
   });
@@ -569,7 +825,6 @@ function buildSlotMachine() {
     if (gameController.getRunning()) return;
     if (gameController.getBet() > MIN_BET) {
       gameController.setBet(gameController.getBet() - 10);
-      gameController.updateBetDisplay();
     }
   });
 
@@ -577,27 +832,15 @@ function buildSlotMachine() {
     if (gameController.getRunning()) return;
     if (gameController.getBet() < MAX_BET) {
       gameController.setBet(gameController.getBet() + 10);
-      gameController.updateBetDisplay();
     }
   });
 
   spinButton.addEventListener("pointerdown", () => {
-    if (!gameController.canSpin()) return;
-    if (!gameController.getInFreeSpins() && !gameController.hasEnoughCredits()) {
-      resultText.text = "Not enough credits!";
-      return;
-    }
-    gameController.deductBet();
-    tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 4, 700, (t: number) => t);
-    const result = gameController.generateResult({ weighted: true });
-    gameController.spinToResult(result);
+    gameController.requestSpin("manual");
   });
 
   autoSpinButton.addEventListener("pointerdown", () => {
-    if (!gameController.canStartAutoSpin()) return;
     gameController.startAutoSpin(AUTO_SPIN_COUNT);
-    tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 2, 700, (t: number) => t);
-    gameController.runNextAutoSpin();
   });
 
   stopAutoSpinButton.addEventListener("pointerdown", () => {
@@ -617,30 +860,35 @@ function buildSlotMachine() {
     autoSpinCount: AUTO_SPIN_COUNT,
   };
 
-  gameController = new GameController(
+  gameController = createGameControllerInstance(
     reels,
     controllerConfig,
-    { creditsText, resultText, amountLabel, slotInfo, totalWinText, autoSpinButton, stopAutoSpinButton, dimOverlay },
+    {
+      creditsText,
+      resultText,
+      amountLabel,
+      slotInfo,
+      totalWinText,
+      dimOverlay,
+      autoSpinButton,
+      stopAutoSpinButton,
+    },
     highlightLayer,
-    winFloatLayer,         // ← pass the new layer
-    tweenTo,
-    backout,
-    bounceOut
+    winFloatLayer
   );
 
-  // ── Tell GameController where the reel grid top-edge is ──────────────────────
-  // mask.y is the Y of the reel-grid top in gameContainer local space.
-  gameController.setReelBounds(mask.y, mask.x);
+  // Tell win animator where the reel grid top-edge is.
+  winAnimator.setReelBounds(mask.y, mask.x);
 
-  gameController.onAutoSpinContinue = () => {
-    setTimeout(() => {
-      tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 2, 700, (t: number) => t);
-      gameController.runNextAutoSpin();
-    }, 1200);
-  };
+  // UI-only: rotate spin button on any spin request coming from the app.
+  gameController.subscribe((event) => {
+    if (event.type === "SpinToResultRequested") {
+      tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 4, 700, (t: number) => t);
+    }
+  });
 
   // Initial render
-  gameController.updateReelsVisuals();
+  reelsPort.updateReelsVisuals();
 
   // ── Animation Loop ───────────────────────────────────────────────────────────
   app.ticker.add((ticker) => {
@@ -671,9 +919,8 @@ function buildSlotMachine() {
         tweening.splice(i, 1);
       }
     }
-    gameController.updateReelsVisuals();
-    // ↓ Pass BOTH deltaTime (for glow/float) and deltaMS (for win count-up)
-    gameController.updateHighlightAnimation(ticker.deltaTime, ticker.deltaMS);
+    reelsPort.updateReelsVisuals();
+    if (uiTick) uiTick(ticker.deltaTime, ticker.deltaMS);
     // Spin lock: disable spin button during win sequence (symbol movement, cascades, WIN text)
     const canSpin = gameController.canSpin();
     spinButton.eventMode = canSpin ? "static" : "none";
