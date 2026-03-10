@@ -1,3 +1,4 @@
+//symbolAnimations.ts
 import type { Texture } from "pixi.js";
 import { WildSpriteSheet } from "./assets/WildSpriteSheet";
 import { ScatterSpriteSheet } from "./assets/ScatterSpriteSheet";

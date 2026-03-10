@@ -39,7 +39,7 @@ const REEL_WIDTH = 160;
 const SYMBOL_SIZE = 125;
 const REELS_COUNT = 5;
 const SYMBOLS_PER_REEL = 3;
-const REEL_STRIP_LENGTH = 15;
+const REEL_STRIP_LENGTH = 30;
 const BG_IMAGE = "try_again.png";
 const MIN_BET = 10;
 const MAX_BET = 1000000;
@@ -372,7 +372,17 @@ function createGameControllerInstance(
         winAnimator.startWinSequence(
           { symbolSize: controllerConfig.symbolSize },
           event.winningPositions,
+          event.scatterPositions,
           () => controller.onWinSequenceFinished()
+        );
+        break;
+      }
+      case "ScatterBonusSequenceRequested": {
+        slotInfoView.showBonusFreeSpinsAwarded(event.freeSpinsAwarded);
+        winAnimator.startScatterBonusSequence(
+          { symbolSize: controllerConfig.symbolSize },
+          event.scatterPositions,
+          () => controller.onScatterSequenceFinished()
         );
         break;
       }
@@ -395,6 +405,25 @@ function createGameControllerInstance(
         setTimeout(() => {
           controller.requestSpin(event.reason === "freeSpin" ? "free" : "auto");
         }, event.afterMs);
+        break;
+      }
+      case "SpinFinished": {
+        winAnimator.clear();
+        break;
+      }
+      case "ScatterCascadeRequested": {
+        reelsPort.cascade(
+          {
+            reelsCount: controllerConfig.reelsCount,
+            symbolsPerReel: controllerConfig.symbolsPerReel,
+            symbolSize: controllerConfig.symbolSize,
+          },
+          event.scatterPositions,
+          () => {
+            const matrix = reelsPort.getVisibleMatrix(controllerConfig.symbolsPerReel);
+            controller.onScatterCascadeFinished(matrix);
+          }
+        );
         break;
       }
     }
@@ -640,7 +669,7 @@ function buildSlotMachine() {
   controlsContainer.addChild(balanceContainer);
 
   const balanceLabel = new Text("BALANCE", new TextStyle({
-    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left",
+    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left", letterSpacing: 2,
   }));
   balanceLabel.anchor.set(0.5);
   balanceContainer.addChild(balanceLabel);
@@ -660,7 +689,7 @@ function buildSlotMachine() {
   controlsContainer.addChild(totalWinContainer);
 
   const totalWinLabel = new Text("TOTAL WIN", new TextStyle({
-    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left",
+    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "left", letterSpacing: 2,
   }));
   totalWinLabel.anchor.set(0.5);
   totalWinContainer.addChild(totalWinLabel);
@@ -706,7 +735,7 @@ function buildSlotMachine() {
   controlsContainer.addChild(betContainer);
 
   const betText = new Text("BET", new TextStyle({
-    fontSize: 16, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "'Lilita One', cursive", align: "center",
+    fontSize: 16, fontWeight: "bold", fill: 0xFFFFFF, fontFamily: "Arial", align: "center", letterSpacing: 2,
   }));
   betText.anchor.set(0.5);
   betContainer.addChild(betText);

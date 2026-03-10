@@ -74,10 +74,10 @@ export class SymbolCell extends Container {
   // ── Tuning ────────────────────────────────────────────────────────────────
   /** Extra radius beyond sprite circle — REDUCED for tighter circle */
   private static readonly GLOW_EXTRA  = 0;
-  /** Gap between glow circle edge and ray base (px) */
-  private static readonly RAY_GAP     = 7;
-  /** Number of rays */
-  private static readonly RAY_COUNT   = 24;
+  /** Gap between glow circle edge and ray base (px) — TIGHTENED to contain burst */
+  private static readonly RAY_GAP     = 3;
+  /** Number of rays — REDUCED for cleaner look */
+  private static readonly RAY_COUNT   = 18;
   /** Rotation speed */
   private static readonly RAY_SPEED   = 0.008;
   /** Pulse speed */
@@ -228,7 +228,8 @@ private _drawRays(pa: number): void {
   const cy      = this.cy;
   const N       = SymbolCell.RAY_COUNT;
   const BASE_R  = this.glowR + SymbolCell.RAY_GAP;
-  const TIP_R   = Math.sqrt(this.cellW * this.cellW + this.cellH * this.cellH) * 0.59;
+  /** TIP_R reduced from 0.59 to 0.48 to prevent rays from bleeding into adjacent cells */
+  const TIP_R   = Math.sqrt(this.cellW * this.cellW + this.cellH * this.cellH) * 0.48;
 
   for (let i = 0; i < N; i++) {
     const angle  = this.rayAngle + (i / N) * Math.PI * 2;

@@ -1,4 +1,4 @@
-/**
+/** ports.ts
  * Application layer ports (interfaces).
  * GameController depends on these abstractions; the composition root injects domain implementations.
  */
@@ -87,6 +87,18 @@ export interface IWinAnimator {
   startWinSequence(
     config: { symbolSize: number },
     winningPositions: WinningPosition[],
+    scatterPositions: WinningPosition[],
+    onComplete: () => void
+  ): void;
+
+  /**
+   * Start the scatter bonus sequence: highlight scatter symbols → float-up → slice.
+   * Message "BONUS! N Free Spins!" is shown by the UI (SlotInfoContainer), not here.
+   * Calls onComplete when the sequence is done.
+   */
+  startScatterBonusSequence(
+    config: { symbolSize: number },
+    scatterPositions: WinningPosition[],
     onComplete: () => void
   ): void;
 }

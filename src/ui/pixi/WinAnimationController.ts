@@ -1,3 +1,4 @@
+//WinAnimationController.ts
 import type { Reel } from "./Reel";
 import type { SymbolCell } from "./SymbolCell";
 import { WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "../../domain/symbolConfig";
@@ -82,15 +83,19 @@ export class WinAnimationController {
     };
 
     for (let ri = 0; ri < reelsCount; ri++) {
+      const reel = reels[ri];
+      // VISUAL CLEANUP: Always clear old highlights from all symbols before cascading.
+      reel.symbolCells.forEach((cell) => {
+        cell.alpha = 1;
+        cell.hideGlow();
+        cell.detachRaysFromExternalLayer();
+      });
+
       const empty = emptyMap.get(ri);
       if (!empty || empty.size === 0) {
-        reels[ri].symbolCells.forEach((c) => {
-          c.alpha = 1;
-        });
         continue;
       }
 
-      const reel = reels[ri];
       const currentSymbols = reel.getVisibleSymbols();
 
       const survivors: { sym: number; fromRow: number }[] = [];

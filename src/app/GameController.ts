@@ -1,3 +1,4 @@
+//GameController.ts
 import type { SpinConfig, SpinOutcome, WinningPosition } from "../domain/SpinEngine";
 import type { IGameSession, ISpinEvaluator, ISpinResultGenerator } from "./ports";
 import type { GameEvent, GameEventListener, SpinKind } from "./events";
@@ -38,11 +39,25 @@ export class GameController {
   private winSequenceComplete = true;
   private winDisplayComplete = true;
 
+  /** True while the scatter bonus animation (highlight → float → slice) is running. */
+  private scatterSequenceActive = false;
+
+  /**
+   * After scatter sequence completes: run win sequence, award free spins, or resolve.
+   */
+  private pendingAfterScatter: {
+    winningPositions: WinningPosition[];
+    scatterPositions: WinningPosition[];
+    spinsWonThisStep: number;
+    hadLineWins: boolean;
+  } | null = null;
+
   /**
    * Free-spin awards coming from scatter that should be applied only *after*
    * the current win resolution flow (wins, animations, cascades) completes.
    */
   private pendingFreeSpinsFromScatter = 0;
+  private pendingScatterPositions: WinningPosition[] = [];
 
   private currentSpinTotalPayout = 0;
   private lastWinningPositions: WinningPosition[] = [];
@@ -73,7 +88,12 @@ export class GameController {
   getAutoSpinsRemaining(): number { return this.session.getAutoSpinsRemaining(); }
 
   canSpin(): boolean {
-    return !this.running && !this.session.isAutoSpinActive() && !this.winLock;
+    return (
+      !this.running &&
+      !this.session.isAutoSpinActive() &&
+      !this.winLock &&
+      !this.scatterSequenceActive
+    );
   }
 
   canStartAutoSpin(): boolean {
@@ -122,6 +142,41 @@ export class GameController {
       return;
     }
     this.emit({ type: "CascadeRequested", winningPositions: this.lastWinningPositions });
+  }
+
+  /** Called by UI when the scatter bonus animation (highlight → float → slice) has finished. */
+  onScatterSequenceFinished(): void {
+    this.scatterSequenceActive = false;
+    const pending = this.pendingAfterScatter;
+    this.pendingAfterScatter = null;
+    if (!pending) return;
+
+    if (pending.hadLineWins) {
+      this.lastWinningPositions = pending.winningPositions;
+      this.emit({ type: "WinSequenceRequested", winningPositions: pending.winningPositions, scatterPositions: pending.scatterPositions });
+      return;
+    }
+    if (pending.spinsWonThisStep > 0) {
+      this.awardFreeSpinsWithPresentation(pending.spinsWonThisStep, true);
+      // Emit cascade for scatter positions BEFORE resolving continuation.
+      // onScatterCascadeFinished() will call resolveContinuation() once the drop is done.
+      if (pending.scatterPositions.length > 0) {
+        this.emit({
+          type: "ScatterCascadeRequested",
+          scatterPositions: pending.scatterPositions,
+        });
+        return;
+      }
+      this.resolveContinuation();
+      return;
+    }
+  }
+
+  /** Called by UI when the scatter cascade (symbol drop-in after scatter removal) finishes. */
+  onScatterCascadeFinished(visibleMatrix: number[][]): void {
+    // Re-evaluate the new board — the cascade may produce a new win.
+    // This mirrors onCascadeFinished() exactly.
+    this.evaluateStep(visibleMatrix);
   }
 
   onCascadeFinished(visibleMatrix: number[][]): void {
@@ -206,32 +261,62 @@ export class GameController {
       }
     }
 
-    if (spinsWonThisStep > 0) {
-      const hasWinsThisStep =
-        outcome.totalPayout > 0 || outcome.winningPositions.length > 0;
+    const hasWinsThisStep =
+      outcome.totalPayout > 0 || outcome.winningPositions.length > 0;
 
+    if (spinsWonThisStep > 0) {
       if (hasWinsThisStep) {
-        // Queue bonus: will be formally awarded after all win animations/cascades finish.
         this.pendingFreeSpinsFromScatter += spinsWonThisStep;
-      } else {
-        // No wins to resolve this step — safe to enter/extend free spins immediately.
-        this.awardFreeSpinsWithPresentation(spinsWonThisStep);
       }
     }
 
-    // Payout
+    const scatterTrigger =
+      (outcome.scatterWin?.freeSpinsAwarded ?? 0) > 0 &&
+      outcome.scatterPositions.length > 0;
+
+    if (scatterTrigger) {
+      this.scatterSequenceActive = true;
+      this.pendingAfterScatter = {
+        winningPositions: outcome.winningPositions,
+        scatterPositions: outcome.scatterPositions,
+        spinsWonThisStep: hasWinsThisStep ? 0 : spinsWonThisStep,
+        hadLineWins: hasWinsThisStep,
+      };
+      if (outcome.totalPayout > 0) {
+        const creditsBefore = this.session.getCredits();
+        this.session.addCredits(outcome.totalPayout);
+        const creditsAfter = this.session.getCredits();
+        this.winLock = true;
+        this.winSequenceComplete = false;
+        this.winDisplayComplete = false;
+        this.currentSpinTotalPayout += outcome.totalPayout;
+        this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
+        this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
+        this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText: "" });
+      } else {
+        this.emit({ type: "ResultTextChanged", text: "" });
+      }
+      this.emit({
+        type: "ScatterBonusSequenceRequested",
+        scatterPositions: outcome.scatterPositions,
+        freeSpinsAwarded: outcome.scatterWin!.freeSpinsAwarded,
+      });
+      return;
+    }
+
+    if (spinsWonThisStep > 0 && !hasWinsThisStep) {
+      this.awardFreeSpinsWithPresentation(spinsWonThisStep);
+    }
+
     if (outcome.totalPayout > 0) {
       const creditsBefore = this.session.getCredits();
       this.session.addCredits(outcome.totalPayout);
       const creditsAfter = this.session.getCredits();
-
       this.winLock = true;
       this.winSequenceComplete = false;
       this.winDisplayComplete = false;
-
       this.currentSpinTotalPayout += outcome.totalPayout;
-      const bonusText = spinsWonThisStep > 0 ? ` | BONUS! ${spinsWonThisStep} Free Spins!` : "";
-
+      const bonusText = "";
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
       this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
       this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText });
@@ -241,7 +326,7 @@ export class GameController {
 
     if (outcome.winningPositions.length > 0) {
       this.lastWinningPositions = outcome.winningPositions;
-      this.emit({ type: "WinSequenceRequested", winningPositions: outcome.winningPositions });
+      this.emit({ type: "WinSequenceRequested", winningPositions: outcome.winningPositions, scatterPositions: outcome.scatterPositions });
       return;
     }
 
@@ -295,7 +380,7 @@ export class GameController {
     }
   }
 
-  private awardFreeSpinsWithPresentation(count: number): void {
+  private awardFreeSpinsWithPresentation(count: number, skipResultText = false): void {
     if (count <= 0) return;
 
     if (this.session.isAutoSpinActive()) {
@@ -309,10 +394,9 @@ export class GameController {
       remaining: this.session.getFreeSpinsRemaining(),
       mode: "entered",
     });
-    this.emit({
-      type: "ResultTextChanged",
-      text: `BONUS! ${count} Free Spins!`,
-    });
+    if (!skipResultText) {
+      this.emit({ type: "ResultTextChanged", text: `${count} Free Spins!` });
+    }
   }
 }
 

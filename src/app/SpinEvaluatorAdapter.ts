@@ -1,4 +1,4 @@
-/**
+/** SpinEvaluatorAdapter.ts
  * Application-layer adapter: implements ISpinEvaluator by delegating to domain SpinEngine.
  */
 import { evaluateSpin } from "../domain/SpinEngine";

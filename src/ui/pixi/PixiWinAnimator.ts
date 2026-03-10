@@ -1,3 +1,4 @@
+//PixiWinAnimator.ts
 import { Container, Sprite, Rectangle, Texture } from "pixi.js";
 import type { IWinAnimator } from "../../app/ports";
 import type { WinningPosition } from "../../domain/SpinEngine";
@@ -106,13 +107,35 @@ export class PixiWinAnimator implements IWinAnimator {
   startWinSequence(
     config: { symbolSize: number },
     winningPositions: WinningPosition[],
+    scatterPositions: WinningPosition[],
+    onComplete: () => void
+  ): void {
+    this._startHighlightFloatSliceSequence(config, winningPositions, scatterPositions, onComplete);
+  }
+
+  startScatterBonusSequence(
+    config: { symbolSize: number },
+    scatterPositions: WinningPosition[],
     onComplete: () => void
   ): void {
     this.clear();
+    // Scatter-only sequence: pass empty excludePositions (all non-scatter cells dim naturally).
+    this._startHighlightFloatSliceSequence(config, scatterPositions, [], onComplete);
+  }
+
+  private _startHighlightFloatSliceSequence(
+    config: { symbolSize: number },
+    positions: WinningPosition[],
+    excludePositions: WinningPosition[],
+    onComplete: () => void
+  ): void {
     this.currentSymbolSize = config.symbolSize;
     this.onSequenceComplete = onComplete;
+    this.winningEntries = [];
+    this.winningCells.clear();
+    this.pendingSliceGroups = 0;
 
-    for (const pos of winningPositions) {
+    for (const pos of positions) {
       this._markCellAt(pos.reelIndex, pos.rowIndex);
     }
 
@@ -121,12 +144,21 @@ export class PixiWinAnimator implements IWinAnimator {
       return;
     }
 
+    // Build a set of cells that must NOT be dimmed.
+    // These are scatter cells that co-triggered a bonus on the same spin as a line win.
+    const excludeCells = new Set<SymbolCell>();
+    for (const pos of excludePositions) {
+      const cell = this.reels[pos.reelIndex]?.getContainerAt(pos.rowIndex);
+      if (cell && !this.winningCells.has(cell)) excludeCells.add(cell);
+    }
+
     this.setDimOverlayVisible(true);
     this.glowPhase = "pulsing";
 
     this.reels.forEach((reel) => {
       reel.symbolCells.forEach((cell) => {
-        if (!this.winningCells.has(cell)) cell.alpha = 0.25;
+        // Dim only cells that are neither a line-win winner nor a bonus-triggering scatter.
+        if (!this.winningCells.has(cell) && !excludeCells.has(cell)) cell.alpha = 0.25;
       });
     });
 

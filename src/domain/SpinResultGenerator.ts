@@ -1,9 +1,9 @@
-/**
+/** SpinResultGenerator.ts
  * Domain service: generates a spin result matrix (symbols per reel).
  * Encapsulates game rules (wild-allowed reels, weighted vs uniform) and delegates
  * actual symbol choice to ISymbolPicker (Dependency Inversion).
  */
-import { TOTAL_SYMBOLS, WILD_SYMBOL_ID } from "./symbolConfig";
+import { TOTAL_SYMBOLS, WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "./symbolConfig";
 import type { ISymbolPicker } from "./ports";
 
 export interface SpinResultGeneratorConfig {

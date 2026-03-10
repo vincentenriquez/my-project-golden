@@ -1,3 +1,4 @@
+//tweenTypes.ts
 /** Callback to register a tween (object, property, target, time, easing, onComplete). */
 export type TweenToFn = (
   object: unknown,

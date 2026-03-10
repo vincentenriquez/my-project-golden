@@ -1,3 +1,5 @@
+//events.ts
+
 import type { SpinOutcome, WinningPosition } from "../domain/SpinEngine";
 
 export type SpinKind = "paid" | "free";
@@ -13,10 +15,12 @@ export type GameEvent =
   | { type: "BetChanged"; from: number; to: number; animate: boolean }
   | { type: "TotalWinChanged"; totalSoFar: number; animate: boolean }
   | { type: "ResultTextChanged"; text: string }
-  | { type: "FreeSpinsChanged"; remaining: number; mode: "entered" | "updated" | "ended" }
+  | { type: "FreeSpinsChanged"; remaining: number; mode: "entered" | "updated" | "ended"; awarded?: number }
   | { type: "AutoSpinChanged"; active: boolean; remaining: number }
-  | { type: "WinSequenceRequested"; winningPositions: WinningPosition[] }
+  | { type: "WinSequenceRequested"; winningPositions: WinningPosition[]; scatterPositions: WinningPosition[] }
+  | { type: "ScatterBonusSequenceRequested"; scatterPositions: WinningPosition[]; freeSpinsAwarded: number }
   | { type: "CascadeRequested"; winningPositions: WinningPosition[] }
+  | { type: "ScatterCascadeRequested"; scatterPositions: WinningPosition[] }
   | { type: "RequestNextSpin"; afterMs: number; reason: "freeSpin" | "autoSpin" }
   | { type: "SpinFinished" };
 

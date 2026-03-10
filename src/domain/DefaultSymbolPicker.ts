@@ -1,3 +1,4 @@
+//DefaultSymbolPicker.ts
 /**
  * Default implementation of ISymbolPicker using domain symbolConfig.
  */

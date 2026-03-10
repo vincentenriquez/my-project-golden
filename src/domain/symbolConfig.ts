@@ -7,9 +7,9 @@ export const SYMBOL_ASSETS = [
   "/watermelonSlice.png",
   "/plums.png",
   "/grapes.png",
-  "/scatter_spritesheet.png",
-  "/scatter_spritesheet.png",
-  "/scatter_spritesheet.pngg",
+  "/lemonSlice.png",
+  "/mangoSlice.png",
+  "/orangeSlice.png",
   "/try_wild.png",
   "/scatter_spritesheet.png",
 ];
@@ -31,15 +31,15 @@ export const SYMBOL_WEIGHTS: number[] = [
 
 /** Paytable: [symbolId][count] => payout multiplier per bet */
 export const PAYTABLE: number[][] = [
-  [0, 0, 4, 14, 60, 200],   // 0 cherry
-  [0, 0, 4, 12, 50, 180],   // 1 strawberry
-  [0, 0, 3, 10, 40, 160],   // 2 watermelon 
-  [0, 0, 3, 8, 35, 140],    // 3 plum
-  [0, 0, 2, 6, 30, 120],    // 4 grape
-  [0, 0, 2, 5, 25, 100],    // 5 lemon
-  [0, 0, 6, 25, 90, 300],   // 6 mango (high)
-  [0, 0, 8, 30, 120, 400],  // 7 orange (high)
-  [0, 0, 10, 50, 250, 500], // 8 wild (highest-paying symbol)
+  [0, 0, 2, 3, 5, 8],   // 0 cherry
+  [0, 0, 3, 6, 9, 12],   // 1 strawberry
+  [0, 0, 4, 10, 16, 20],   // 2 watermelon 
+  [0, 0, 5, 15, 20, 30],    // 3 plum
+  [0, 0, 10, 25, 40, 75],    // 4 grape
+  [0, 0, 15, 40, 60, 100],    // 5 lemon
+  [0, 0, 20, 60, 95, 140],   // 6 mango (high)
+  [0, 0, 30, 100, 150, 250],  // 7 orange (high)
+  [0, 0, 0, 0, 0, 0], // 8 wild (highest-paying symbol)
   [0, 0, 0, 0, 0, 0],       // 9 scatter (no line payout)
 ];
 
@@ -55,7 +55,7 @@ export const PAYTABLE: number[][] = [
 
 /** Scatter count -> free spins awarded (retrigger during bonus uses same table). */
 export const FREE_SPINS_AWARDED: Record<number, number> = {
-  3: 10, 4: 15, 5: 20, 6: 25,
+  3: 10, 4: 12, 5: 14, 6: 16, 7: 18
 };
 
 /**

@@ -1,5 +1,5 @@
 /**
- * SlotInfoContainer
+ * SlotInfoContainer.ts
  *
  * Unified text information display for the slot machine UI.
  * Shows different messages based on game state with GSAP typing animation in default mode.
@@ -94,6 +94,17 @@ export class SlotInfoContainer {
     this._killTweens();
     this.text.visible = false;
     this.state = "default";
+  }
+
+  /**
+   * Show the scatter bonus message (e.g. "BONUS! 10 Free Spins!") in this container.
+   * Used when 3+ Scatter symbols trigger the feature; do not display this in resultText.
+   */
+  showBonusFreeSpinsAwarded(count: number): void {
+    this._killTweens();
+    this.state = "freeSpin";
+    this.text.text = `BONUS! ${count} Free Spins!`;
+    this.text.visible = true;
   }
 
   private _killTweens(): void {

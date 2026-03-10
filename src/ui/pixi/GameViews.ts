@@ -1,3 +1,4 @@
+//GameViews.ts
 import type { Graphics, Sprite, Text } from "pixi.js";
 import type { SlotInfoContainer } from "./SlotInfoContainer";
 import type {
@@ -79,6 +80,10 @@ export class PixiSlotInfoView implements SlotInfoView {
   setFreeSpinCount(count: number): void {
     this.slotInfo.setFreeSpinCount(count);
   }
+
+   showBonusFreeSpinsAwarded(count: number): void {
+     this.slotInfo.showBonusFreeSpinsAwarded(count);
+   }
 }
 
 export class PixiDimOverlayView implements DimOverlayView {

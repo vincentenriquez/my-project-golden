@@ -1,4 +1,4 @@
-/**
+/** SpinResultGeneratorAdapter.ts
  * Application-layer adapter: implements ISpinResultGenerator by delegating to domain.
  */
 import { generateSpinResult } from "../domain/SpinResultGenerator";

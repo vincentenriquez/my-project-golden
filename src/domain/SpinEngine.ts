@@ -1,3 +1,4 @@
+//SpinEngine.ts
 import {
   TOTAL_SYMBOLS,
   WILD_SYMBOL_ID,
@@ -72,6 +73,12 @@ export interface SpinOutcome {
    * The UI layer can use this to drive highlights and animations.
    */
   winningPositions: WinningPosition[];
+
+  /**
+   * Positions where Scatter symbols appear (for scatter bonus animation).
+   * Populated when scatterWin is present; used by UI for highlight/float/slice sequence.
+   */
+  scatterPositions: WinningPosition[];
 }
 
 /**
@@ -144,7 +151,7 @@ export function evaluateSpin(
   const freeSpinsAwarded = FREE_SPINS_AWARDED[scatterCount] ?? 0;
 
   const scatterWin: ScatterWin | null =
-    scatterCount > 0 || freeSpinsAwarded > 0
+    freeSpinsAwarded > 0
       ? {
           symbol: SCATTER_SYMBOL_ID,
           count: scatterCount,
@@ -152,6 +159,17 @@ export function evaluateSpin(
           freeSpinsAwarded,
         }
       : null;
+
+  const scatterPositions: WinningPosition[] = [];
+  if (freeSpinsAwarded > 0) {
+    for (let row = 0; row < rows; row++) {
+      for (let reel = 0; reel < cols; reel++) {
+        if (baseMatrix[row]?.[reel] === SCATTER_SYMBOL_ID) {
+          scatterPositions.push({ reelIndex: reel, rowIndex: row });
+        }
+      }
+    }
+  }
 
   // ── Aggregate winnings and mark winning positions ────────────────────────
   let totalWaysPayout = 0;
@@ -194,6 +212,7 @@ export function evaluateSpin(
     totalWaysPayout,
     totalScatterPayout,
     winningPositions,
+    scatterPositions,
   };
 }
 

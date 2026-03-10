@@ -1,4 +1,4 @@
-/**
+/** ports.ts
  * Domain ports (interfaces) for DDD.
  * The domain defines what it needs; infrastructure or app provides implementations.
  */

@@ -1,3 +1,4 @@
+//uiPorts.ts
 /**
  * UI ports used by the Application layer.
  *
@@ -22,6 +23,11 @@ export interface SlotInfoView {
   setAutoSpin(remaining: number): void;
   setFreeSpin(count: number): void;
   setFreeSpinCount(count: number): void;
+  /**
+   * Show a one-shot "bonus free spins awarded" message (e.g. after 3 scatters).
+   * The UI layer decides exact wording and animation.
+   */
+  showBonusFreeSpinsAwarded(count: number): void;
 }
 
 export interface DimOverlayView {
