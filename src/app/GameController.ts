@@ -58,6 +58,8 @@ export class GameController {
    */
   private pendingFreeSpinsFromScatter = 0;
   private pendingScatterPositions: WinningPosition[] = [];
+  private postScatterCascadePositions: WinningPosition[] = [];
+  private scatterOnlyTrigger = false;
 
   private currentSpinTotalPayout = 0;
   private lastWinningPositions: WinningPosition[] = [];
@@ -147,29 +149,21 @@ export class GameController {
   /** Called by UI when the scatter bonus animation (highlight → float → slice) has finished. */
   onScatterSequenceFinished(): void {
     this.scatterSequenceActive = false;
-    const pending = this.pendingAfterScatter;
-    this.pendingAfterScatter = null;
-    if (!pending) return;
 
-    if (pending.hadLineWins) {
-      this.lastWinningPositions = pending.winningPositions;
-      this.emit({ type: "WinSequenceRequested", winningPositions: pending.winningPositions, scatterPositions: pending.scatterPositions });
+    const positions = this.postScatterCascadePositions;
+    this.postScatterCascadePositions = [];
+
+    if (positions.length > 0) {
+      // Emit the cascade — onScatterCascadeFinished() continues the flow.
+      this.emit({
+        type: "ScatterCascadeRequested",
+        scatterPositions: positions,
+      });
       return;
     }
-    if (pending.spinsWonThisStep > 0) {
-      this.awardFreeSpinsWithPresentation(pending.spinsWonThisStep, true);
-      // Emit cascade for scatter positions BEFORE resolving continuation.
-      // onScatterCascadeFinished() will call resolveContinuation() once the drop is done.
-      if (pending.scatterPositions.length > 0) {
-        this.emit({
-          type: "ScatterCascadeRequested",
-          scatterPositions: pending.scatterPositions,
-        });
-        return;
-      }
-      this.resolveContinuation();
-      return;
-    }
+
+    // No positions to cascade — continue directly.
+    this.resolveContinuation();
   }
 
   /** Called by UI when the scatter cascade (symbol drop-in after scatter removal) finishes. */
@@ -207,13 +201,14 @@ export class GameController {
     const bet = this.session.getBet();
 
     const creditsBefore = this.session.getCredits();
-    if (kind === "paid") {
-      if (!this.session.hasEnoughCreditsForBet()) {
-        this.emit({ type: "SpinBlocked", reason: "insufficientCredits" });
-        return;
-      }
-      this.session.deductBetForSpin();
+
+    // Deduct for ALL spins, including free spins
+    if (!this.session.hasEnoughCreditsForBet()) {
+      this.emit({ type: "SpinBlocked", reason: "insufficientCredits" });
+      return;
     }
+    this.session.deductBetForSpin();
+
     const creditsAfter = this.session.getCredits();
     if (creditsAfter !== creditsBefore) {
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: false });
@@ -222,9 +217,11 @@ export class GameController {
     // New paid spin resets the per-spin total. Free-spin cascades keep accumulating within their own spin.
     if (source === "manual" || source === "auto") {
       this.currentSpinTotalPayout = 0;
-      this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
-      // Also clear any queued scatter awards carried over from the previous spin.
       this.pendingFreeSpinsFromScatter = 0;
+      this.pendingScatterPositions = [];
+      this.postScatterCascadePositions = [];
+      this.scatterOnlyTrigger = false;
+      this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
     }
 
     this.running = true;
@@ -244,70 +241,34 @@ export class GameController {
     const outcome: SpinOutcome = this.spinEvaluator.evaluate(spinConfig, visibleMatrix, this.session.getBet());
     this.emit({ type: "OutcomeEvaluated", outcome });
 
-    // Scatter -> free spins (mode-dependent)
+    // ── 1. Collect scatter award (always deferred) ──────────────────────────
     let spinsWonThisStep = 0;
     const scatterCount = outcome.scatterWin?.count ?? 0;
 
     if (!this.session.isInFreeSpins()) {
-      // Base game: require 3+ scatters (uses existing FREE_SPINS_AWARDED table via domain).
       if (outcome.scatterWin?.freeSpinsAwarded && outcome.scatterWin.freeSpinsAwarded > 0) {
         spinsWonThisStep = outcome.scatterWin.freeSpinsAwarded;
       }
     } else {
-      // Free Spins mode: ANY scatter symbol retriggers additional free spins.
-      if (scatterCount > 0) {
-        // Assumption: 1 extra free spin per scatter symbol.
-        spinsWonThisStep = scatterCount;
+      if (outcome.scatterWin?.freeSpinsAwarded && outcome.scatterWin.freeSpinsAwarded > 0) {
+        spinsWonThisStep = outcome.scatterWin.freeSpinsAwarded;
       }
     }
 
-    const hasWinsThisStep =
-      outcome.totalPayout > 0 || outcome.winningPositions.length > 0;
-
+    // Always queue scatter — resolve AFTER all wins/cascades settle.
     if (spinsWonThisStep > 0) {
-      if (hasWinsThisStep) {
-        this.pendingFreeSpinsFromScatter += spinsWonThisStep;
+      this.pendingFreeSpinsFromScatter += spinsWonThisStep;
+      // Store positions for the animation (overwrite is fine — last scatter wins).
+      if (outcome.scatterPositions.length > 0) {
+        this.pendingScatterPositions = outcome.scatterPositions;
+      }
+      // Track whether this step had NO line wins — scatter-only trigger skips cascade
+      if (outcome.winningPositions.length === 0) {
+        this.scatterOnlyTrigger = true;
       }
     }
 
-    const scatterTrigger =
-      (outcome.scatterWin?.freeSpinsAwarded ?? 0) > 0 &&
-      outcome.scatterPositions.length > 0;
-
-    if (scatterTrigger) {
-      this.scatterSequenceActive = true;
-      this.pendingAfterScatter = {
-        winningPositions: outcome.winningPositions,
-        scatterPositions: outcome.scatterPositions,
-        spinsWonThisStep: hasWinsThisStep ? 0 : spinsWonThisStep,
-        hadLineWins: hasWinsThisStep,
-      };
-      if (outcome.totalPayout > 0) {
-        const creditsBefore = this.session.getCredits();
-        this.session.addCredits(outcome.totalPayout);
-        const creditsAfter = this.session.getCredits();
-        this.winLock = true;
-        this.winSequenceComplete = false;
-        this.winDisplayComplete = false;
-        this.currentSpinTotalPayout += outcome.totalPayout;
-        this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
-        this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
-        this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText: "" });
-      } else {
-        this.emit({ type: "ResultTextChanged", text: "" });
-      }
-      this.emit({
-        type: "ScatterBonusSequenceRequested",
-        scatterPositions: outcome.scatterPositions,
-        freeSpinsAwarded: outcome.scatterWin!.freeSpinsAwarded,
-      });
-      return;
-    }
-
-    if (spinsWonThisStep > 0 && !hasWinsThisStep) {
-      this.awardFreeSpinsWithPresentation(spinsWonThisStep);
-    }
-
+    // ── 2. Award line win payout ─────────────────────────────────────────────
     if (outcome.totalPayout > 0) {
       const creditsBefore = this.session.getCredits();
       this.session.addCredits(outcome.totalPayout);
@@ -316,31 +277,59 @@ export class GameController {
       this.winSequenceComplete = false;
       this.winDisplayComplete = false;
       this.currentSpinTotalPayout += outcome.totalPayout;
-      const bonusText = "";
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
       this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
-      this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText });
+      this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText: "" });
     } else if (spinsWonThisStep === 0) {
       this.emit({ type: "ResultTextChanged", text: "" });
     }
 
+    // ── 3. Trigger win sequence (cascades will follow) ───────────────────────
     if (outcome.winningPositions.length > 0) {
       this.lastWinningPositions = outcome.winningPositions;
-      this.emit({ type: "WinSequenceRequested", winningPositions: outcome.winningPositions, scatterPositions: outcome.scatterPositions });
+      this.emit({
+        type: "WinSequenceRequested",
+        winningPositions: outcome.winningPositions,
+        scatterPositions: outcome.scatterPositions,
+      });
       return;
     }
 
+    // ── 4. No line wins — go straight to continuation (scatter fires there) ──
     this.resolveContinuation();
   }
 
   private resolveContinuation(): void {
     this.winSequenceComplete = true;
 
-    // If any scatter bonuses were queued behind the win flow, apply them now.
+    // If scatter bonus was queued, fire it now — board is fully settled.
     if (this.pendingFreeSpinsFromScatter > 0) {
       const queued = this.pendingFreeSpinsFromScatter;
+      const positions = this.pendingScatterPositions;
+      const scatterOnly = this.scatterOnlyTrigger;
       this.pendingFreeSpinsFromScatter = 0;
+      this.pendingScatterPositions = [];
+      this.scatterOnlyTrigger = false;
+
       this.awardFreeSpinsWithPresentation(queued);
+
+      // Fire the scatter visual sequence. onScatterSequenceFinished() will
+      // call resolveContinuation() again once the animation completes.
+      if (positions.length > 0) {
+        // Only cascade if there were line wins — scatter-only spins go straight
+        // to free spin activation after the bonus animation completes.
+        if (!scatterOnly) {
+          this.postScatterCascadePositions = positions;
+        }
+        this.scatterSequenceActive = true;
+        this.emit({
+          type: "ScatterBonusSequenceRequested",
+          scatterPositions: positions,
+          freeSpinsAwarded: queued,
+        });
+        return;
+      }
+      // No positions to animate — fall through to normal continuation.
     }
 
     if (this.session.isInFreeSpins()) {
@@ -394,9 +383,9 @@ export class GameController {
       remaining: this.session.getFreeSpinsRemaining(),
       mode: "entered",
     });
-    if (!skipResultText) {
-      this.emit({ type: "ResultTextChanged", text: `${count} Free Spins!` });
-    }
+    // if (!skipResultText) {
+    //   this.emit({ type: "ResultTextChanged", text: `${count} Free Spins!` });
+    // }
   }
 }
 

@@ -99,6 +99,7 @@ export interface IWinAnimator {
   startScatterBonusSequence(
     config: { symbolSize: number },
     scatterPositions: WinningPosition[],
-    onComplete: () => void
+    onComplete: () => void,
+    onFloatStart?: () => void
   ): void;
 }

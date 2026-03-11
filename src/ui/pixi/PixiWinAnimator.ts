@@ -33,6 +33,7 @@ export class PixiWinAnimator implements IWinAnimator {
   private pendingSliceGroups = 0;
   private winDisplayFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private onSequenceComplete: (() => void) | null = null;
+  private onFloatStart: (() => void) | null = null;
 
   private currentSymbolSize = 0;
 
@@ -55,6 +56,7 @@ export class PixiWinAnimator implements IWinAnimator {
 
     this.pendingSliceGroups = 0;
     this.onSequenceComplete = null;
+    this.onFloatStart = null;
 
     if (this.winDisplayFallbackTimer !== null) {
       clearTimeout(this.winDisplayFallbackTimer);
@@ -92,6 +94,13 @@ export class PixiWinAnimator implements IWinAnimator {
           cell.hideGlow();
           cell.detachRaysFromExternalLayer();
         });
+
+        if (this.onFloatStart) {
+          const cb = this.onFloatStart;
+          this.onFloatStart = null;
+          cb();
+        }
+
         this._spawnFloatingWinSymbols();
       }
       return;
@@ -110,17 +119,54 @@ export class PixiWinAnimator implements IWinAnimator {
     scatterPositions: WinningPosition[],
     onComplete: () => void
   ): void {
-    this._startHighlightFloatSliceSequence(config, winningPositions, scatterPositions, onComplete);
+    this._startHighlightFloatSliceSequence(config, winningPositions, [], onComplete);
   }
 
   startScatterBonusSequence(
     config: { symbolSize: number },
     scatterPositions: WinningPosition[],
-    onComplete: () => void
+    onComplete: () => void,
+    onFloatStart?: () => void
   ): void {
     this.clear();
-    // Scatter-only sequence: pass empty excludePositions (all non-scatter cells dim naturally).
-    this._startHighlightFloatSliceSequence(config, scatterPositions, [], onComplete);
+    this.onFloatStart = onFloatStart ?? null;
+    this.currentSymbolSize = config.symbolSize;
+    this.onSequenceComplete = onComplete;
+    this.winningEntries = [];
+    this.winningCells.clear();
+    this.pendingSliceGroups = 0;
+
+    // Step 1 — highlight scatter cells
+    for (const pos of scatterPositions) {
+      this._markCellAt(pos.reelIndex, pos.rowIndex);
+    }
+
+    if (this.winningCells.size === 0) {
+      this._completeOnce();
+      return;
+    }
+
+    // Dim non-scatter cells
+    this.setDimOverlayVisible(true);
+    this.glowPhase = "pulsing";
+    this.reels.forEach((reel) => {
+      reel.symbolCells.forEach((cell) => {
+        if (!this.winningCells.has(cell)) cell.alpha = 0.25;
+      });
+    });
+
+    // Step 2 — hold the highlight for a deliberate beat
+    const SCATTER_HIGHLIGHT_HOLD_MS = 800;
+
+    setTimeout(() => {
+      if (this.glowPhase !== "pulsing") return;
+
+      // Step 3 — fade glow, then float + slice happens inside update()
+      this.glowPhase = "fading";
+      this.glowFadeStart = Date.now();
+      // _spawnFloatingWinSymbols() is called at end of fading phase in update()
+      // which leads to slice → _completeOnce() → onComplete — unchanged
+    }, SCATTER_HIGHLIGHT_HOLD_MS);
   }
 
   private _startHighlightFloatSliceSequence(

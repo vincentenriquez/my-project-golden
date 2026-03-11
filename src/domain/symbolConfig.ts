@@ -26,7 +26,7 @@ export const TOTAL_WAYS = 243;
 
 /** Symbol weights for weighted RNG (higher = more common) */
 export const SYMBOL_WEIGHTS: number[] = [
-  30, 28, 26, 24, 20, 18, 10, 8, 5, 3,
+  30, 28, 26, 24, 20, 18, 10, 8, 5, 30,
 ];
 
 /** Paytable: [symbolId][count] => payout multiplier per bet */

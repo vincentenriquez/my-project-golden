@@ -24,6 +24,7 @@ import { SpinEvaluatorAdapter } from "../../app/SpinEvaluatorAdapter";
 import { PixiReelsPort } from "./PixiReelsPort";
 import { PixiWinAnimator } from "./PixiWinAnimator";
 import { RangeCountUp } from "../shared/RangeCountUp";
+import { ScatterIntroEffect } from "./ScatterIntroEffect";
 import {
   PixiAutoSpinButtonsView,
   PixiDimOverlayView,
@@ -78,6 +79,9 @@ function resizeFrame() {
 resizeFrame();
 app.renderer.on("resize", resizeFrame);
 
+// After your existing Assets.load([...]) call
+await ScatterIntroEffect.preload();
+
 // --------- Layer containers ---------
 const backgroundLayer = new Container();
 const machineLayer    = new Container();
@@ -86,6 +90,16 @@ const frameLayer      = new Container();
 const highlightLayer  = new Container();
 const uiLayer         = new Container();
 const overlayLayer    = new Container();
+
+const stageOverLayer = new Container();
+stageOverLayer.zIndex = 100;
+app.stage.addChild(stageOverLayer);
+
+const scatterIntroEffect = new ScatterIntroEffect(app, stageOverLayer);
+
+app.renderer.on("resize", () => {
+  scatterIntroEffect.onResize();
+})
 
 /**
  * winFloatLayer — sits ABOVE highlightLayer (zIndex 35) so floating clones
@@ -378,13 +392,19 @@ function createGameControllerInstance(
         break;
       }
       case "ScatterBonusSequenceRequested": {
-        slotInfoView.showBonusFreeSpinsAwarded(event.freeSpinsAwarded);
-        winAnimator.startScatterBonusSequence(
-          { symbolSize: controllerConfig.symbolSize },
-          event.scatterPositions,
-          () => controller.onScatterSequenceFinished()
-        );
-        break;
+  slotInfoView.showBonusFreeSpinsAwarded(event.freeSpinsAwarded);
+
+  winAnimator.startScatterBonusSequence(
+    { symbolSize: controllerConfig.symbolSize },
+    event.scatterPositions,
+    () => {
+      // Slice is done — show effect for 2000ms, then continue flow
+      scatterIntroEffect.showFor(2000, () => {
+        controller.onScatterSequenceFinished();
+      });
+    }
+  );
+  break;
       }
       case "CascadeRequested": {
         reelsPort.cascade(
