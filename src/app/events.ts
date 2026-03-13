@@ -18,11 +18,10 @@ export type GameEvent =
   | { type: "FreeSpinsChanged"; remaining: number; mode: "entered" | "updated" | "ended"; awarded?: number }
   | { type: "AutoSpinChanged"; active: boolean; remaining: number }
   | { type: "WinSequenceRequested"; winningPositions: WinningPosition[]; scatterPositions: WinningPosition[] }
-  | { type: "ScatterBonusSequenceRequested"; scatterPositions: WinningPosition[]; freeSpinsAwarded: number }
+  | { type: "ScatterBonusSequenceRequested"; scatterPositions: WinningPosition[]; freeSpinsAwarded: number; isRetrigger: boolean }
   | { type: "CascadeRequested"; winningPositions: WinningPosition[] }
   | { type: "ScatterCascadeRequested"; scatterPositions: WinningPosition[] }
   | { type: "RequestNextSpin"; afterMs: number; reason: "freeSpin" | "autoSpin" }
   | { type: "SpinFinished" };
 
 export type GameEventListener = (event: GameEvent) => void;
-

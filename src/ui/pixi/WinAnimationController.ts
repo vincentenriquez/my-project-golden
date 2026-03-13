@@ -15,6 +15,7 @@ export interface CascadeConfig {
   reelsCount: number;
   symbolsPerReel: number;
   symbolSize: number;
+  rowPadding: number;
 }
 
 /**
@@ -61,7 +62,7 @@ export class WinAnimationController {
     setDimOverlayVisible: (visible: boolean) => void,
     onCascadeFinished: () => void
   ): void {
-    const { reelsCount, symbolsPerReel, symbolSize } = config;
+    const { reelsCount, symbolsPerReel, symbolSize, rowPadding } = config;
 
     setDimOverlayVisible(false);
 
@@ -145,12 +146,12 @@ export class WinAnimationController {
         let fromY: number;
         if (row < numEmpty) {
           // New symbols enter from above the visible area (one slot above per row for clean stack).
-          fromY = -(numEmpty - row) * symbolSize - WinAnimationController.CASCADE_NEW_SYMBOL_OFFSET;
+          fromY = -(numEmpty - row) * (symbolSize + rowPadding) - WinAnimationController.CASCADE_NEW_SYMBOL_OFFSET;
         } else {
-          fromY = survivors[row - numEmpty].fromRow * symbolSize;
+          fromY = survivors[row - numEmpty].fromRow * (symbolSize + rowPadding);
         }
 
-        const toY = row * symbolSize;
+        const toY = row * (symbolSize + rowPadding);
 
         if (Math.abs(fromY - toY) < 1) {
           cell.y = toY;

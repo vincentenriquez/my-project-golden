@@ -8,7 +8,7 @@ import { Assets, Texture, Rectangle, AnimatedSprite } from "pixi.js";
  */
 export class ScatterSpriteSheet {
   /** File name of the underlying sheet image. */
-  public static readonly IMAGE_KEY = "scatter_spritesheet.png";
+  public static readonly IMAGE_KEY = "finalScatter.png";
 
   private static _instance: ScatterSpriteSheet | null = null;
 
@@ -16,10 +16,10 @@ export class ScatterSpriteSheet {
   private readonly animations = new Map<string, Texture[]>();
 
   /** Frame size and grid: 3x3 in 500x500, each frame 166x156 with centered padding. */
-  private static readonly FRAME_W = 166;
-  private static readonly FRAME_H = 156;
-  private static readonly PAD_X = (500 - 166 * 3) / 2;  // 1
-  private static readonly PAD_Y = (500 - 158 * 3) / 2;  // 16
+  private static readonly FRAME_W = 255;
+  private static readonly FRAME_H = 274;
+  private static readonly PAD_X = (500 - 255 * 3) / 2;  // 1
+  private static readonly PAD_Y = (500 - 274 * 3) / 2;  // 16
 
   private constructor(sheetTexture: Texture) {
     const source =

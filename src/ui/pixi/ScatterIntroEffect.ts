@@ -1,101 +1,178 @@
-// src/ui/pixi/ScatterIntroEffect.ts
-import { Application, Assets, Container, Sprite } from "pixi.js";
+import * as PIXI from "pixi.js";
+
+interface PhysicsSymbol {
+  sprite: PIXI.Sprite;
+  targetY: number;
+  velocity: number;
+  isLanded: boolean;
+  baseScale: number;
+  squash: number; // Deformation amount
+}
 
 export class ScatterIntroEffect {
-  private readonly alienContainer: Container;
-  private aliens: Sprite[] = [];
-  private count = 0;
-  private tickerCallback: ((ticker: { deltaTime: number }) => void) | null = null;
+  private readonly container: PIXI.Container;
+  private physicsSymbols: PhysicsSymbol[] = [];
+  private tickerCallback: ((ticker: { deltaMS: number }) => void) | null = null;
+  private completionCallback: (() => void) | null = null;
+  
+  private spawnedRows = 0;
+  private spawnTimer = 0;
+  private totalRows = 0;
+  private totalCols = 0;
+  
+  private readonly visualSize = 150; // Visual size for scaling
+  private readonly gridSpacing = 50; // Tighter spacing for "compressed" look
+  private readonly rowSpawnInterval = 300; 
+  private readonly gravity = 0.8;
 
-  private static readonly ALIEN_FRAMES = [
+  private static readonly SYMBOL_FRAMES = [
     "/cherry.png",
-  "/strawberry.png",
-  "/watermelonSlice.png",
-  "/plums.png",
-  "/grapes.png",
-  "/lemonSlice.png",
-  "/mangoSlice.png",
-  "/orangeSlice.png",
+    "/orangeSlice.png",
+    "/lemonSlice.png",
+    "/plums.png",
+    "/grapes.png",
+    "/watermelonSlice.png",
+    "/strawberrySlice.png",
+    "/mangoSlice.png",
   ];
-  private static readonly ALIEN_COUNT = 1000;
 
-  /**
-   * @param app     - Your existing PIXI Application instance
-   * @param layer   - The Container layer to attach to (use overlayLayer for top z-index)
-   */
   constructor(
-    private readonly app: Application,
-    private readonly layer: Container,
+    private readonly app: PIXI.Application,
+    private readonly layer: PIXI.Container,
   ) {
-    this.alienContainer = new Container();
-    this.alienContainer.visible = false;
-    this.layer.addChild(this.alienContainer);
+    this.container = new PIXI.Container();
+    this.container.visible = false;
+    this.layer.addChild(this.container);
   }
 
   static async preload(): Promise<void> {
-    await Assets.load("https://pixijs.com/assets/spritesheet/monsters.json");
+    // Explicitly preload all fruits used in the intro
+    await PIXI.Assets.load(ScatterIntroEffect.SYMBOL_FRAMES);
   }
 
-    showFor(durationMs: number, onComplete: () => void): void {
-      this.show();
+  showFor(durationMs: number, onComplete: () => void): void {
+    this.completionCallback = onComplete;
+    this.show();
+  }
 
-      setTimeout(() => {
-        this.hide();
-        onComplete();
-      }, durationMs);
-    }
+  private show(): void {
+    this.container.visible = true;
+    this.container.removeChildren();
+    this.physicsSymbols = [];
+    this.spawnTimer = 0;
 
-    private show(): void {
-      this.alienContainer.x = this.app.screen.width / 2;
-      this.alienContainer.y = this.app.screen.height / 2;
-      this.alienContainer.scale.set(1);
-      this.alienContainer.rotation = 0;
-      this.alienContainer.visible = true;
-      this.count = 0;
-      this._spawnAliens();
-      this._startTicker();
-    }
+    const screenW = this.app.renderer.screen.width;
+    const screenH = this.app.renderer.screen.height;
 
-    private hide(): void {
-      this._stopTicker();
-      this.alienContainer.visible = false;
-      this.alienContainer.removeChildren();
-      this.aliens = [];
-    }
+    // Calculate grid dimensions based on tighter spacing
+    this.totalCols = Math.ceil(screenW / this.gridSpacing) + 1;
+    this.totalRows = Math.ceil(screenH / this.gridSpacing) + 1;
+    
+    // Start from the bottom row and spawn upwards
+    this.spawnedRows = this.totalRows - 1;
 
-    /** Call when the renderer resizes to keep the container centered on screen. */
-    onResize(): void {
-    if (!this.alienContainer.visible) return;
-    this.alienContainer.x = this.app.screen.width / 2;
-    this.alienContainer.y = this.app.screen.height / 2;
-    }
+    this._startTicker();
+  }
 
-  private _spawnAliens(): void {
-    this.alienContainer.removeChildren();
-    this.aliens = [];
+  private hide(): void {
+    this._stopTicker();
+    this.container.visible = false;
+    this.container.removeChildren();
+    this.physicsSymbols = [];
+  }
 
-    for (let i = 0; i < ScatterIntroEffect.ALIEN_COUNT; i++) {
-      const frameName = ScatterIntroEffect.ALIEN_FRAMES[i % 8];
-      const alien = Sprite.from(frameName);
+  onResize(): void {
+    // transient
+  }
 
-      alien.x = (Math.random() - 0.5) * this.app.screen.width * 2;
-      alien.y = (Math.random() - 0.5) * this.app.screen.height * 2;
-      alien.anchor.set(0.5);
+  private _spawnRow(rowIndex: number): void {
+    const frames = ScatterIntroEffect.SYMBOL_FRAMES;
+    for (let col = 0; col < this.totalCols; col++) {
+      const frameName = frames[Math.floor(Math.random() * frames.length)];
+      const sprite = PIXI.Sprite.from(frameName);
 
-      this.aliens.push(alien);
-      this.alienContainer.addChild(alien);
+      const targetY = rowIndex * this.gridSpacing + this.gridSpacing / 2;
+      
+      sprite.x = col * this.gridSpacing + this.gridSpacing / 2;
+      sprite.y = -300 - (rowIndex * 150); // Start higher up
+      sprite.anchor.set(0.5);
+      
+      let baseScale = 1;
+      const maxDim = Math.max(sprite.texture.width, sprite.texture.height);
+      if (maxDim > 0) {
+        baseScale = this.visualSize / maxDim;
+      }
+      sprite.scale.set(baseScale);
+      sprite.rotation = Math.random() * Math.PI * 2;
+
+      this.physicsSymbols.push({
+        sprite,
+        targetY,
+        velocity: 5 + Math.random() * 15,
+        isLanded: false,
+        baseScale,
+        squash: 0
+      });
+      this.container.addChild(sprite);
     }
   }
 
   private _startTicker(): void {
-    this.tickerCallback = () => {
-      for (const alien of this.aliens) {
-        alien.rotation += 0.9;
+    this.tickerCallback = (t: { deltaMS: number }) => {
+      // 1. Spawning logic
+      if (this.spawnedRows >= 0) {
+        this.spawnTimer += t.deltaMS;
+        if (this.spawnTimer >= this.rowSpawnInterval) {
+          this._spawnRow(this.spawnedRows);
+          this.spawnedRows--;
+          this.spawnTimer = 0;
+        }
       }
-      this.count += 0.1;
-      this.alienContainer.scale.x = Math.sin(this.count);
-      this.alienContainer.scale.y = Math.sin(this.count);
-      this.alienContainer.rotation += 0.19;
+
+      // 2. Physics / Animation logic
+      for (const p of this.physicsSymbols) {
+        if (!p.isLanded) {
+          p.velocity += this.gravity;
+          p.sprite.y += p.velocity;
+
+          if (p.sprite.y >= p.targetY) {
+            const impactForce = p.velocity;
+            p.sprite.y = p.targetY;
+            p.isLanded = true;
+            p.velocity = 0;
+            // Intensified squash based on impact force
+            p.squash = Math.min(0.7, impactForce * 0.05);
+          }
+        }
+
+        // Apply and recover squash (vertical compression, horizontal expansion)
+        if (p.isLanded && p.squash > 0) {
+          p.squash *= Math.pow(0.94, t.deltaMS / 16); // Decay independent of frame rate
+          if (p.squash < 0.005) p.squash = 0;
+          
+          p.sprite.scale.y = p.baseScale * (1 - p.squash);
+          p.sprite.scale.x = p.baseScale * (1 + p.squash);
+        } else if (p.isLanded) {
+          p.sprite.scale.set(p.baseScale);
+        }
+
+        // Always rotate slowly for life
+        p.sprite.rotation += 0.02;
+      }
+
+      // 3. Completion check
+      if (this.spawnedRows < 0 && this.physicsSymbols.length > 0) {
+        const allLanded = this.physicsSymbols.every(p => p.isLanded && p.squash === 0);
+        if (allLanded && this.completionCallback) {
+          const callback = this.completionCallback;
+          this.completionCallback = null;
+          // Hold the grid for a moment before clearing
+          setTimeout(() => {
+            this.hide();
+            callback();
+          }, 50);
+        }
+      }
     };
     this.app.ticker.add(this.tickerCallback);
   }

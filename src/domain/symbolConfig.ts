@@ -2,16 +2,16 @@
 // Pure symbol configuration, paytables, and weighted RNG helpers (no Pixi imports).
 
 export const SYMBOL_ASSETS = [
-  "/cherry.png",
-  "/strawberry.png",
-  "/watermelonSlice.png",
-  "/plums.png",
-  "/grapes.png",
-  "/lemonSlice.png",
-  "/mangoSlice.png",
-  "/orangeSlice.png",
-  "/try_wild.png",
-  "/scatter_spritesheet.png",
+  "/apple.png",
+  "/banana.png",
+  "/lemonade.png",
+  "/mangga.png",
+  "/a.png",
+  "/k.png",
+  "/q.png",
+  "/j.png",
+  "/finalWild.png",
+  "/finalScatter.png",
 ];
 
 export const TOTAL_SYMBOLS = 10;
@@ -26,19 +26,19 @@ export const TOTAL_WAYS = 243;
 
 /** Symbol weights for weighted RNG (higher = more common) */
 export const SYMBOL_WEIGHTS: number[] = [
-  30, 28, 26, 24, 20, 18, 10, 8, 5, 30,
+  30, 28, 26, 24, 20, 18, 10, 8, 5, 3,
 ];
 
 /** Paytable: [symbolId][count] => payout multiplier per bet */
 export const PAYTABLE: number[][] = [
-  [0, 0, 2, 3, 5, 8],   // 0 cherry
-  [0, 0, 3, 6, 9, 12],   // 1 strawberry
-  [0, 0, 4, 10, 16, 20],   // 2 watermelon 
-  [0, 0, 5, 15, 20, 30],    // 3 plum
-  [0, 0, 10, 25, 40, 75],    // 4 grape
-  [0, 0, 15, 40, 60, 100],    // 5 lemon
-  [0, 0, 20, 60, 95, 140],   // 6 mango (high)
-  [0, 0, 30, 100, 150, 250],  // 7 orange (high)
+  [0, 0, 2, 3, 5, 8],   // 0 apple
+  [0, 0, 3, 6, 9, 12],   // 1 banana
+  [0, 0, 4, 10, 16, 20],   // 2 lemonade 
+  [0, 0, 5, 15, 20, 30],    // 3 mango
+  [0, 0, 10, 25, 40, 75],    // 4 a
+  [0, 0, 15, 40, 60, 100],    // 5 k
+  [0, 0, 20, 60, 95, 140],   // 6 q (high)
+  [0, 0, 30, 100, 150, 250],  // 7 j (high)
   [0, 0, 0, 0, 0, 0], // 8 wild (highest-paying symbol)
   [0, 0, 0, 0, 0, 0],       // 9 scatter (no line payout)
 ];

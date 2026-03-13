@@ -49,7 +49,7 @@ export class GameSession {
    * Deducts bet from credits for a paid spin. Free spins do not cost credits.
    */
   deductBetForSpin(): void {
-    // if (this.inFreeSpins) return;
+    //if (this.inFreeSpins) return;
     this.credits -= this.bet;
   }
 

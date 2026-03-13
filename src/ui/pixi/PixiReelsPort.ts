@@ -78,7 +78,7 @@ export class PixiReelsPort implements IReelsPort {
   }
 
   cascade(
-    config: { reelsCount: number; symbolsPerReel: number; symbolSize: number },
+    config: { reelsCount: number; symbolsPerReel: number; symbolSize: number; rowPadding: number },
     winningPositions: WinningPosition[],
     onComplete: () => void
   ): void {

@@ -10,6 +10,7 @@ export interface ReelConfig {
   symbolsPerReel: number;
   stripLength:    number;
   totalSymbols:   number;
+  rowPadding:     number;
 }
 
 /**
@@ -48,7 +49,7 @@ export class Reel {
     this.textures = textures;
     this.container = new Container();
     this.blur = new BlurFilter();
-
+     
     this.strip = Array.from(
       { length: config.stripLength },
       () => Math.floor(Math.random() * config.totalSymbols)
@@ -59,7 +60,7 @@ export class Reel {
       const symbolId = this.strip[j % this.strip.length];
       const cell = new SymbolCell(textures[symbolId], symbolId, config.symbolSize, config.symbolSize);
       cell.x = Math.round((config.reelWidth - config.symbolSize) / 2);
-      cell.y = j * config.symbolSize;
+      cell.y = j * (config.symbolSize + config.rowPadding);
 
       // ✅ Apply animation for wild/scatter on initial construction
       if (symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID) {
@@ -113,7 +114,7 @@ export class Reel {
   clearVisualOverrides(): void { this.visualOverrides.clear(); }
 
   updateSprites(): void {
-    const { symbolSize, reelWidth, symbolsPerReel } = this.config;
+    const { symbolSize, reelWidth, symbolsPerReel, rowPadding } = this.config;
     const len = this.strip.length;
     const velocity = this.position - this.previousPosition;
     this.blur.blurY = Math.abs(velocity) * 8;
@@ -157,7 +158,7 @@ export class Reel {
           cell.setTexture(this.textures[symbolId], symbolId);
         }
       }
-      cell.y = sIdx * symbolSize - frac * symbolSize;
+      cell.y = sIdx * (symbolSize + rowPadding) - frac * (symbolSize + rowPadding);
     }
   }
 

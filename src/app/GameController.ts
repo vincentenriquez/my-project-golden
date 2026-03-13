@@ -69,7 +69,7 @@ export class GameController {
     private readonly session: IGameSession,
     private readonly spinEvaluator: ISpinEvaluator,
     private readonly spinResultGenerator: ISpinResultGenerator
-  ) {}
+  ) { }
 
   // ── Events ──────────────────────────────────────────────────────────────
   subscribe(listener: GameEventListener): () => void {
@@ -307,11 +307,14 @@ export class GameController {
       const queued = this.pendingFreeSpinsFromScatter;
       const positions = this.pendingScatterPositions;
       const scatterOnly = this.scatterOnlyTrigger;
+
       this.pendingFreeSpinsFromScatter = 0;
       this.pendingScatterPositions = [];
       this.scatterOnlyTrigger = false;
 
-      this.awardFreeSpinsWithPresentation(queued);
+      const isRetrigger = this.session.isInFreeSpins();
+
+      this.awardFreeSpinsWithPresentation(queued, isRetrigger);
 
       // Fire the scatter visual sequence. onScatterSequenceFinished() will
       // call resolveContinuation() again once the animation completes.
@@ -326,6 +329,7 @@ export class GameController {
           type: "ScatterBonusSequenceRequested",
           scatterPositions: positions,
           freeSpinsAwarded: queued,
+          isRetrigger,
         });
         return;
       }
@@ -336,7 +340,8 @@ export class GameController {
       if (this.session.getFreeSpinsRemaining() > 0) {
         const remaining = this.session.consumeFreeSpin();
         this.emit({ type: "FreeSpinsChanged", remaining, mode: "updated" });
-        this.emit({ type: "RequestNextSpin", afterMs: 400, reason: "freeSpin" });
+        // Wait 1200ms before next free spin (gives time for wins/cascades to visually clear)
+        this.emit({ type: "RequestNextSpin", afterMs: 1200, reason: "freeSpin" });
       } else {
         this.session.endFreeSpinSeries();
         this.emit({ type: "FreeSpinsChanged", remaining: 0, mode: "ended" });
@@ -369,7 +374,7 @@ export class GameController {
     }
   }
 
-  private awardFreeSpinsWithPresentation(count: number, skipResultText = false): void {
+  private awardFreeSpinsWithPresentation(count: number, isRetrigger: boolean): void {
     if (count <= 0) return;
 
     if (this.session.isAutoSpinActive()) {
@@ -381,7 +386,7 @@ export class GameController {
     this.emit({
       type: "FreeSpinsChanged",
       remaining: this.session.getFreeSpinsRemaining(),
-      mode: "entered",
+      mode: isRetrigger ? "updated" : "entered",
     });
     // if (!skipResultText) {
     //   this.emit({ type: "ResultTextChanged", text: `${count} Free Spins!` });

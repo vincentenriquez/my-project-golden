@@ -153,11 +153,11 @@ export function evaluateSpin(
   const scatterWin: ScatterWin | null =
     freeSpinsAwarded > 0
       ? {
-          symbol: SCATTER_SYMBOL_ID,
-          count: scatterCount,
-          payout: 0,
-          freeSpinsAwarded,
-        }
+        symbol: SCATTER_SYMBOL_ID,
+        count: scatterCount,
+        payout: 0,
+        freeSpinsAwarded,
+      }
       : null;
 
   const scatterPositions: WinningPosition[] = [];
