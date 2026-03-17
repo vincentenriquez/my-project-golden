@@ -1,4 +1,5 @@
 import * as PIXI from "pixi.js";
+import { gsap } from "gsap";
 
 interface PhysicsSymbol {
   sprite: PIXI.Sprite;
@@ -14,15 +15,16 @@ export class ScatterIntroEffect {
   private physicsSymbols: PhysicsSymbol[] = [];
   private tickerCallback: ((ticker: { deltaMS: number }) => void) | null = null;
   private completionCallback: (() => void) | null = null;
-  
+
   private spawnedRows = 0;
   private spawnTimer = 0;
   private totalRows = 0;
   private totalCols = 0;
-  
+  private isTransitioningOut = false;
+
   private readonly visualSize = 150; // Visual size for scaling
   private readonly gridSpacing = 50; // Tighter spacing for "compressed" look
-  private readonly rowSpawnInterval = 300; 
+  private readonly rowSpawnInterval = 200;
   private readonly gravity = 0.8;
 
   private static readonly SYMBOL_FRAMES = [
@@ -60,6 +62,7 @@ export class ScatterIntroEffect {
     this.container.removeChildren();
     this.physicsSymbols = [];
     this.spawnTimer = 0;
+    this.isTransitioningOut = false;
 
     const screenW = this.app.renderer.screen.width;
     const screenH = this.app.renderer.screen.height;
@@ -67,7 +70,7 @@ export class ScatterIntroEffect {
     // Calculate grid dimensions based on tighter spacing
     this.totalCols = Math.ceil(screenW / this.gridSpacing) + 1;
     this.totalRows = Math.ceil(screenH / this.gridSpacing) + 1;
-    
+
     // Start from the bottom row and spawn upwards
     this.spawnedRows = this.totalRows - 1;
 
@@ -92,11 +95,11 @@ export class ScatterIntroEffect {
       const sprite = PIXI.Sprite.from(frameName);
 
       const targetY = rowIndex * this.gridSpacing + this.gridSpacing / 2;
-      
+
       sprite.x = col * this.gridSpacing + this.gridSpacing / 2;
       sprite.y = -300 - (rowIndex * 150); // Start higher up
       sprite.anchor.set(0.5);
-      
+
       let baseScale = 1;
       const maxDim = Math.max(sprite.texture.width, sprite.texture.height);
       if (maxDim > 0) {
@@ -149,7 +152,7 @@ export class ScatterIntroEffect {
         if (p.isLanded && p.squash > 0) {
           p.squash *= Math.pow(0.94, t.deltaMS / 16); // Decay independent of frame rate
           if (p.squash < 0.005) p.squash = 0;
-          
+
           p.sprite.scale.y = p.baseScale * (1 - p.squash);
           p.sprite.scale.x = p.baseScale * (1 + p.squash);
         } else if (p.isLanded) {
@@ -163,14 +166,11 @@ export class ScatterIntroEffect {
       // 3. Completion check
       if (this.spawnedRows < 0 && this.physicsSymbols.length > 0) {
         const allLanded = this.physicsSymbols.every(p => p.isLanded && p.squash === 0);
-        if (allLanded && this.completionCallback) {
+        if (allLanded && this.completionCallback && !this.isTransitioningOut) {
           const callback = this.completionCallback;
           this.completionCallback = null;
-          // Hold the grid for a moment before clearing
-          setTimeout(() => {
-            this.hide();
-            callback();
-          }, 50);
+          this.isTransitioningOut = true;
+          this._playTransitionOutSequence(callback);
         }
       }
     };
@@ -181,6 +181,60 @@ export class ScatterIntroEffect {
     if (this.tickerCallback) {
       this.app.ticker.remove(this.tickerCallback);
       this.tickerCallback = null;
+    }
+  }
+
+  private async _playTransitionOutSequence(onComplete: () => void): Promise<void> {
+    const outTl = gsap.timeline();
+    const screenH = this.app.renderer.screen.height;
+
+    // Sequence through the physics symbols (which are stored bottom-to-top)
+    for (let i = 0; i < this.physicsSymbols.length; i++) {
+      const p = this.physicsSymbols[i];
+
+      // Group symbols into rows (rowIndex 0 = bottom-most)
+      const rowIndex = Math.floor(i / this.totalCols);
+
+      // Stagger rows by 0.1s + tiny per-fruit variance for organicity
+      const rowDelay = rowIndex * 0.1;
+      const delay = rowDelay + Math.random() * 0.03;
+
+      // Phase 1: Anticipation lift (pull up slightly)
+      outTl.to(p.sprite, {
+        y: p.sprite.y - 30,
+        duration: 0.2,
+        ease: "power1.out"
+      }, delay);
+
+      // Phase 2: Gravity Drop (accelerate downwards off screen with tumbling)
+      outTl.to(p.sprite, {
+        y: screenH + 200,
+        rotation: p.sprite.rotation + (Math.random() - 0.5) * Math.PI,
+        duration: 0.5 + Math.random() * 0.15,
+        ease: "power2.in"
+      }, delay + 0.2); // Start fall exactly when anticipation ends
+    }
+
+    // Trigger theme swap/UI change EARLY so the background is ready while things are falling
+    // (We do this during the timeline or right after it starts to allow "hinting")
+    gsap.delayedCall(0.1, () => onComplete());
+
+    // Wait for the entire physics sequence to finish
+    await outTl;
+
+    // Wait extra frames to ensure theme activation is visually committed
+    await new Promise(r => setTimeout(r, 60));
+
+    // Capture the symbols to destroy before hide() potentially resets the array
+    const symbolsToDestroy = [...this.physicsSymbols];
+    
+    // Stop ticker and hide container visually
+    this.hide();
+
+    // Perform final memory-safe destruction
+    for (const p of symbolsToDestroy) {
+      if (p.sprite.parent) p.sprite.parent.removeChild(p.sprite);
+      p.sprite.destroy();
     }
   }
 }

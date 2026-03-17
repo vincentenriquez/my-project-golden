@@ -62,12 +62,6 @@ export class Reel {
       cell.x = Math.round((config.reelWidth - config.symbolSize) / 2);
       cell.y = j * (config.symbolSize + config.rowPadding);
 
-      // ✅ Apply animation for wild/scatter on initial construction
-      if (symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID) {
-        const frames = getAnimationFrames(symbolId);
-        if (frames.length > 0) cell.setAnimated(frames);
-      }
-
       this.symbolCells.push(cell);
       this.container.addChild(cell);
     }
@@ -134,27 +128,9 @@ export class Reel {
       const stripIndex = (normalizedTop + sIdx) % len;
       const baseId = this.strip[stripIndex];
       const symbolId = this.visualOverrides.get(sIdx) ?? baseId;
-      const isAnimated = symbolId === WILD_SYMBOL_ID || symbolId === SCATTER_SYMBOL_ID;
 
-      if (isAnimated) {
-        // Ensure the cell is actually animated. On first load/refresh it's possible
-        // to have the right symbolId but still be showing the static texture.
-        if (cell.symbolId !== symbolId || !cell.hasAnimated()) {
-          const frames = getAnimationFrames(symbolId);
-          if (frames.length > 0) {
-            cell.setAnimated(frames);
-            cell.symbolId = symbolId;
-          }
-        }
-      } else {
-        // Switching away from an animated symbol — restore static
-        if (
-          (cell.symbolId === WILD_SYMBOL_ID || cell.symbolId === SCATTER_SYMBOL_ID) &&
-          symbolId !== WILD_SYMBOL_ID && symbolId !== SCATTER_SYMBOL_ID
-        ) {
-          cell.clearAnimated();
-        }
-        if (this.textures[symbolId] && cell.sprite.texture !== this.textures[symbolId]) {
+      if (cell.symbolId !== symbolId) {
+        if (this.textures[symbolId]) {
           cell.setTexture(this.textures[symbolId], symbolId);
         }
       }

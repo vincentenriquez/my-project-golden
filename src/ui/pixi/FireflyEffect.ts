@@ -1,3 +1,4 @@
+//FireflyEffect.ts
 import * as PIXI from "pixi.js";
 
 interface Firefly {
@@ -92,6 +93,7 @@ export class FireflyEffect {
   public show(): void {
     this.isVisible = true;
     this.container.visible = true;
+    this.container.zIndex = 10000;
   }
 
   public hide(): void {
