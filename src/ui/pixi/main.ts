@@ -10,13 +10,12 @@ import {
   TextStyle,
 } from "pixi.js";
 import { SYMBOL_ASSETS, WILD_SYMBOL_ID, SCATTER_SYMBOL_ID } from "../../domain/symbolConfig";
-import { WildSpriteSheet } from "./assets/WildSpriteSheet";
-import { ScatterSpriteSheet } from "./assets/ScatterSpriteSheet";
-import { FireSpriteSheet } from "./assets/FireSpriteSheet";
 import { Reel } from "./Reel";
 import { GameController } from "../../app/GameController";
-import type { IGameSession, ISpinEvaluator, ISpinResultGenerator } from "../../app/ports";
+import type { IGameSession, ISpinEvaluator, ISpinResultGenerator, IScatterService } from "../../app/ports";
 import type { GameEvent } from "../../app/events";
+import { ScatterService } from "../../domain/ScatterService";
+import { ScatterServiceAdapter } from "../../app/ScatterServiceAdapter";
 import { GameSession } from "../../domain/GameSession";
 import { DefaultSymbolPicker } from "../../domain/DefaultSymbolPicker";
 import type { ISymbolPicker } from "../../domain/ports";
@@ -33,8 +32,10 @@ import {
   PixiTextView,
 } from "./GameViews";
 import { FireflyEffect } from "./FireflyEffect";
+import { FireFrameEffect } from "./FireFrameEffect";
 import { WinCountUp } from "../shared/WinCountUp";
 import { SlotInfoContainer } from "./SlotInfoContainer";
+import { GreetingsScatterPanel } from "./GreetingsScatterPanel";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
@@ -86,12 +87,16 @@ app.renderer.on("resize", resizeFrame);
 
 // After your existing Assets.load([...]) call
 await ScatterIntroEffect.preload();
+await FireFrameEffect.preload();
+await GreetingsScatterPanel.preload();
 
 // --------- Layer containers ---------
 const backgroundLayer = new Container();
 const machineLayer = new Container();
 const reelsLayer = new Container();
 const frameLayer = new Container();
+const fireLayer = new Container();
+const greetingsLayer = new Container();
 const highlightLayer = new Container();
 const uiLayer = new Container();
 const overlayLayer = new Container();
@@ -118,10 +123,12 @@ app.stage.addChild(backgroundLayer);
 gameContainer.addChild(machineLayer);
 gameContainer.addChild(reelsLayer);
 gameContainer.addChild(frameLayer);
+gameContainer.addChild(fireLayer);      // fire overlay — above frame, below highlights
 gameContainer.addChild(highlightLayer);
 gameContainer.addChild(winFloatLayer);   // ← NEW
 gameContainer.addChild(uiLayer);
 gameContainer.addChild(overlayLayer);
+gameContainer.addChild(greetingsLayer);  // greetings panel overlay — highest in gameContainer
 
 gameContainer.sortableChildren = true;
 app.stage.sortableChildren = true;
@@ -130,10 +137,12 @@ backgroundLayer.zIndex = 0;
 machineLayer.zIndex = 5;
 reelsLayer.zIndex = 10;
 frameLayer.zIndex = 20;
+fireLayer.zIndex = 22;         // above reel frame, below win highlights
 highlightLayer.zIndex = 30;
 winFloatLayer.zIndex = 35;             // ← above highlights, below UI
 uiLayer.zIndex = 40;
 overlayLayer.zIndex = 50;
+greetingsLayer.zIndex = 110;           // highest so it covers everything including UI if needed
 overlayLayer.sortableChildren = true;
 
 // ---------- Tween system ----------
@@ -199,6 +208,8 @@ let gameController: GameController;
 let reelsPort: PixiReelsPort;
 let winAnimator: PixiWinAnimator;
 let fireflyEffect: FireflyEffect;
+let fireFrameEffect: FireFrameEffect;
+let greetingsScatterPanel: GreetingsScatterPanel;
 let uiTick: ((deltaTime: number, deltaMS: number) => void) | null = null;
 
 // ---------- Helper: GameController factory (composition root: DDD + SOLID) ----------
@@ -247,13 +258,17 @@ function createGameControllerInstance(
     },
     symbolPicker
   );
+  const scatterService: IScatterService = new ScatterServiceAdapter(new ScatterService());
+  const wildAllowedReelIndices = new Set([1, 2, 3]);
   const dimOverlayView = new PixiDimOverlayView(uiDeps.dimOverlay);
   reelsPort = new PixiReelsPort(
     reels,
     controllerConfig.symbolsPerReel,
     tweenTo,
     bounceOut,
-    () => symbolPicker.pick()
+    () => symbolPicker.pick(),
+    wildAllowedReelIndices,
+    () => symbolPicker.pickExcluding(WILD_SYMBOL_ID)
   );
   winAnimator = new PixiWinAnimator(
     reels,
@@ -266,7 +281,8 @@ function createGameControllerInstance(
     controllerConfig,
     session,
     spinEvaluator,
-    spinResultGenerator
+    spinResultGenerator,
+    scatterService
   );
 
   // HUD views/adapters (UI-owned)
@@ -381,10 +397,12 @@ function createGameControllerInstance(
           uiDeps.changeFrame("/Final_Frame.png");
           uiDeps.setScatterModeUi(false);
           uiDeps.setStarfieldWarp(false);
+          fireFrameEffect?.hide();        // ← stop fire animation
         }
         else if (event.mode === "entered") {
           slotInfoView.setFreeSpin(event.remaining);
-          uiDeps.setStarfieldWarp(true);
+          //uiDeps.setStarfieldWarp(true);
+          //fireFrameEffect?.show();        // ← start fire animation
         }
         else slotInfoView.setFreeSpinCount(event.remaining);
         break;
@@ -421,11 +439,21 @@ function createGameControllerInstance(
               return;
             }
 
-            // Show effect for 2000ms, then swap UI and continue flow
+            // Show fruit rain effect for 2000ms
             scatterIntroEffect.showFor(2000, () => {
+              // Swap UI and background to scatter mode FIRST
               uiDeps.changeFrame("/SCATTER_1MODE.png");
               uiDeps.setScatterModeUi(true);
-              controller.onScatterSequenceFinished();
+
+              uiDeps.setStarfieldWarp(true);
+
+              // Now show the final greeting panel and WAIT for user click
+              greetingsScatterPanel.show(() => {
+                // User tapped — continue flow to start free spins
+                controller.onScatterSequenceFinished();
+              });
+
+              fireFrameEffect?.show();
             });
           }
         );
@@ -496,10 +524,8 @@ function createGameControllerInstance(
   return controller;
 }
 
-// ---------- Load Assets ----------
 await Assets.load([
   ...SYMBOL_ASSETS,
-  "/scatter_spritesheet.png",
   "/win_container.png",
   "/bgQuickBtn.png",
   BG_IMAGE,
@@ -508,8 +534,7 @@ await Assets.load([
   "/playBtnn.png",
   "/stopBtnn.png",
   "/SCATTER_1MODE.png",
-  "/fire-0.png",
-  "/fire.json"
+  "/animated_symbol.json"
 ]);
 const bgQuickBtn = Texture.from("/bgQuickBtn.png");
 const winContainerTexture = Texture.from("/win_container.png");
@@ -519,17 +544,6 @@ const autoSpinStop = Texture.from("/stopBtnn.png");
 
 function onAssetsLoaded() {
   slotTextures = SYMBOL_ASSETS.map((url) => Texture.from(url));
-  // Make wild/scatter "static" fallback a single frame (not the full sheet).
-  try {
-    slotTextures[WILD_SYMBOL_ID] = WildSpriteSheet.getInstance().getFrame("wild_00.png");
-  } catch {
-    // If something goes wrong, the reel will still try to upgrade to AnimatedSprite.
-  }
-  try {
-    slotTextures[SCATTER_SYMBOL_ID] = ScatterSpriteSheet.getInstance().getFrame("finalScatter.png");
-  } catch {
-    // Scatter will use SYMBOL_ASSETS fallback or upgrade when sheet is ready.
-  }
   buildSlotMachine();
 }
 onAssetsLoaded();
@@ -553,38 +567,10 @@ function buildSlotMachine() {
 
   // Initialize FireflyEffect
   FireflyEffect.loadTexture().then(texture => {
-    fireflyEffect = new FireflyEffect(app, backgroundLayer, texture);
+    fireflyEffect = new FireflyEffect(app, stageOverLayer, texture);
     fireflyEffect.hide(); // Start hidden
   });
 
-  // ── Scatter Fire Animations ────────────────────────────────────────────────
-  // const fireContainer = new Container();
-  // fireContainer.visible = false;
-  // //fireContainer.zIndex = 25; // Above frameLayer (20)
-  // gameContainer.addChild(fireContainer);
-
-  // const leftFire = FireSpriteSheet.getInstance().createAnimatedSprite(0.25);
-  // leftFire.x = 300;
-  // leftFire.y = 500;
-  // leftFire.scale.set(2);
-  // fireContainer.addChild(leftFire);
-
-  // const rightFire = FireSpriteSheet.getInstance().createAnimatedSprite(0.25);
-  // rightFire.scale.x = -2; // Flip horizontally
-  // rightFire.scale.y = 2;
-  // rightFire.x = -100;
-  // rightFire.y = -100;
-  // fireContainer.addChild(rightFire);
-
-  // // Position relative to gameContainer center
-  // fireContainer.x = 0;
-  // fireContainer.y = 100; // Adjusted for local space
-  // function resizeFire() {
-  //   // No absolute positioning needed, it's relative to gameContainer
-  //   // You could also scale the container based on screen size if needed
-  // }
-  // resizeFire();
-  // app.renderer.on("resize", resizeFire);
 
   // ── Reel container + mask ───────────────────────────────────────────────────
   reelContainer = new Container();
@@ -609,6 +595,24 @@ function buildSlotMachine() {
   // winFloatLayer shares the same origin as gameContainer (no offset needed)
   winFloatLayer.x = 0;
   winFloatLayer.y = 0;
+
+  // ── Fire frame and Greetings overlays (scatter mode) ──────────────────────
+  // Instantiate AFTER mask is positioned so reel bounds are final.
+
+  const reelBounds = {
+    frameWidth: frameWidth,
+    frameHeight: frameHeight,
+    originX: mask.x,
+    originY: mask.y,
+  };
+
+  fireLayer.x = 0;
+  fireLayer.y = 0;
+  fireFrameEffect = new FireFrameEffect(fireLayer, reelBounds);
+
+  greetingsLayer.x = 0;
+  greetingsLayer.y = 0;
+  greetingsScatterPanel = new GreetingsScatterPanel(app, greetingsLayer, reelBounds);
 
   // ── Frame decoration ────────────────────────────────────────────────────────
   const padding = 10;
@@ -649,9 +653,9 @@ function buildSlotMachine() {
     reels.push(reel);
   }
 
-  // ── Dim overlay (covers reels when there's a win) ──────────────────────────
+  // ── Dim overlay (covers reels when there's a win or spin) ───────────────────
   const dimOverlay = new Graphics();
-  dimOverlay.beginFill(0x000000, 0);
+  dimOverlay.beginFill(0x000000, 0); // Semi-transparent black
   dimOverlay.drawRect(
     -frameSprite.width / 2,
     -frameSprite.height / 2,
@@ -914,7 +918,7 @@ function buildSlotMachine() {
   const quickBets = [10, 50, 100];
   const QBTN_WIDTH = 65;
   const QBTN_HEIGHT = 50;
-  const QBTN_GAP = 40;
+  const QBTN_GAP = 39;
   const qTotalWidth = quickBets.length * QBTN_WIDTH + (quickBets.length - 1) * QBTN_GAP;
   const qStartX = -qTotalWidth / 2;
 
@@ -924,15 +928,16 @@ function buildSlotMachine() {
     btn.cursor = "pointer";
     btn.x = qStartX + idx * (QBTN_WIDTH + QBTN_GAP);
     btn.y = -QBTN_HEIGHT / 2;
-    const label = new Text(`${amount}`, { fontSize: 25, fontFamily: "Arial", fontWeight: "bold", fill: 0xFDF1C0 });
+    const label = new Text(`${amount}`, { fontSize: 20, fontFamily: "Roboto Serif", fontWeight: "bold", fill: 0xFDF1C0 });
     label.anchor.set(0.5);
     label.x = QBTN_WIDTH / 2;
     label.y = QBTN_HEIGHT / 2;
     btn.addChild(label);
     btn.on("pointerdown", () => {
       if (gameController.getRunning()) return;
-      let newBet = gameController.getBet() + amount;
+      let newBet = amount;
       if (newBet > MAX_BET) newBet = MAX_BET;
+      if (newBet < MIN_BET) newBet = MIN_BET;
       gameController.setBet(newBet);
     });
     quickBetContainer.addChild(btn);
@@ -1010,7 +1015,9 @@ function buildSlotMachine() {
       },
       setStarfieldWarp: (active: boolean) => {
         if (!fireflyEffect) return;
-        if (active) fireflyEffect.show();
+        if (active) {
+          fireflyEffect.show();
+        }
         fireflyEffect.setWarp(active);
         if (!active) {
           fireflyEffect.hide();
@@ -1028,6 +1035,12 @@ function buildSlotMachine() {
   gameController.subscribe((event) => {
     if (event.type === "SpinToResultRequested") {
       tweenTo(spinButton, "rotation", spinButton.rotation + Math.PI * 4, 700, (t: number) => t);
+      // Dim reels during spin
+      dimOverlay.visible = true;
+    }
+    if (event.type === "SpinStopped") {
+      // Restore reels after spin stops
+      dimOverlay.visible = false;
     }
   });
 

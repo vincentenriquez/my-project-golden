@@ -4,7 +4,6 @@ import {
   WILD_SYMBOL_ID,
   SCATTER_SYMBOL_ID,
   PAYTABLE,
-  FREE_SPINS_AWARDED,
 } from "./symbolConfig";
 // SpinEngine.ts
 // Pure spin evaluation types and API surface (no Pixi dependencies).
@@ -135,42 +134,6 @@ export function evaluateSpin(
     }
   }
 
-  // ── Scatter evaluation on ORIGINAL matrix ─────────────────────────────────
-  let scatterCount = 0;
-  const rows = baseMatrix.length;
-  const cols = rows > 0 ? baseMatrix[0].length : 0;
-
-  for (let row = 0; row < rows; row++) {
-    for (let reel = 0; reel < cols; reel++) {
-      if (baseMatrix[row]?.[reel] === SCATTER_SYMBOL_ID) {
-        scatterCount++;
-      }
-    }
-  }
-
-  const freeSpinsAwarded = FREE_SPINS_AWARDED[scatterCount] ?? 0;
-
-  const scatterWin: ScatterWin | null =
-    freeSpinsAwarded > 0
-      ? {
-        symbol: SCATTER_SYMBOL_ID,
-        count: scatterCount,
-        payout: 0,
-        freeSpinsAwarded,
-      }
-      : null;
-
-  const scatterPositions: WinningPosition[] = [];
-  if (freeSpinsAwarded > 0) {
-    for (let row = 0; row < rows; row++) {
-      for (let reel = 0; reel < cols; reel++) {
-        if (baseMatrix[row]?.[reel] === SCATTER_SYMBOL_ID) {
-          scatterPositions.push({ reelIndex: reel, rowIndex: row });
-        }
-      }
-    }
-  }
-
   // ── Aggregate winnings and mark winning positions ────────────────────────
   let totalWaysPayout = 0;
   for (const win of waysWins) {
@@ -188,8 +151,8 @@ export function evaluateSpin(
     }
   }
 
-  let totalScatterPayout = 0;
-  // Scatter symbols do not contribute to direct payouts or winning positions.
+  const totalScatterPayout = 0;
+  // Scatter symbols do not contribute to direct payouts or winning positions in this engine.
   const totalPayout = totalWaysPayout + totalScatterPayout;
 
   const winningPositions: WinningPosition[] = [];
@@ -207,12 +170,12 @@ export function evaluateSpin(
     matrix: baseMatrix,
     expandedMatrix,
     waysWins,
-    scatterWin,
+    scatterWin: null, // Scatters are now evaluated externally
     totalPayout,
     totalWaysPayout,
     totalScatterPayout,
     winningPositions,
-    scatterPositions,
+    scatterPositions: [], // Scatters are now evaluated externally
   };
 }
 

@@ -13,9 +13,11 @@ export class PixiReelsPort implements IReelsPort {
     private readonly symbolsPerReel: number,
     private readonly tweenTo: TweenToFn,
     private readonly bounceOut: (t: number) => number,
-    symbolPicker: () => number
+    symbolPicker: () => number,
+    wildAllowedReelIndices: Set<number>,          // ← ADD
+    symbolPickerExcludingWild: () => number       // ← ADD
   ) {
-    this.cascadeController = new WinAnimationController(this.tweenTo, this.bounceOut, symbolPicker);
+    this.cascadeController = new WinAnimationController(this.tweenTo, this.bounceOut, symbolPicker, wildAllowedReelIndices, symbolPickerExcludingWild);
   }
 
   updateReelsVisuals(): void {

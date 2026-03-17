@@ -35,6 +35,18 @@ export interface ISpinResultGenerator {
   generate(options?: GenerateSpinResultOptions): number[][];
 }
 
+export interface ScatterEvaluationResult {
+  symbol: number;
+  count: number;
+  freeSpinsAwarded: number;
+  positions: WinningPosition[];
+}
+
+/** Evaluates scatter wins and awarding logic. */
+export interface IScatterService {
+  evaluate(matrix: number[][]): ScatterEvaluationResult;
+}
+
 /**
  * Board/reels port (UI/Infrastructure implements this).
  * Application orchestrates the flow but never touches PIXI types.

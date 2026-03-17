@@ -1,10 +1,11 @@
 //PixiWinAnimator.ts
-import { Container, Sprite, Rectangle, Texture } from "pixi.js";
+import { Container, Sprite, AnimatedSprite, Rectangle, Texture } from "pixi.js";
 import type { IWinAnimator } from "../../app/ports";
 import type { WinningPosition } from "../../domain/SpinEngine";
 import type { TweenToFn } from "./tweenTypes";
 import type { Reel } from "./Reel";
 import type { SymbolCell } from "./SymbolCell";
+import { AnimatedSymbolSheet } from "./assets/AnimatedSymbolSheet";
 
 interface WinningCellEntry {
   cell: SymbolCell;
@@ -13,7 +14,8 @@ interface WinningCellEntry {
 }
 
 export class PixiWinAnimator implements IWinAnimator {
-  // ── Win display layout constants (copied from legacy GameController) ──────
+  // ── Win display layout constants ──────────────────────────────────────────
+  private static readonly ANIMATE_IN_PLACE_DURATION = 2000; // ms symbol animates before rising
   private static readonly RISE_DURATION = 420;
   private static readonly HOLD_DURATION = 900;
   private static readonly FADE_DURATION = 320;
@@ -43,7 +45,7 @@ export class PixiWinAnimator implements IWinAnimator {
     private readonly winFloatLayer: Container,
     private readonly tweenTo: TweenToFn,
     private readonly setDimOverlayVisible: (visible: boolean) => void
-  ) {}
+  ) { }
 
   setReelBounds(reelTopY: number, reelLeftX: number): void {
     this.reelTopY = reelTopY;
@@ -225,6 +227,12 @@ export class PixiWinAnimator implements IWinAnimator {
     cell.showGlow(1.0, 0);
   }
 
+  // ─── Phase 3: Spawn animated clones IN PLACE ─────────────────────────────
+  //
+  // Called once glow finishes fading.  We create an AnimatedSprite clone at
+  // the cell's exact world position and let it play in place for
+  // ANIMATE_IN_PLACE_DURATION ms BEFORE starting the rise tween.
+  //
   private _spawnFloatingWinSymbols(): void {
     if (this.winningEntries.length === 0) {
       this._completeOnce();
@@ -233,8 +241,9 @@ export class PixiWinAnimator implements IWinAnimator {
 
     const symbolSize = this.currentSymbolSize;
     const seen = new Set<string>();
-    const spawned: { entry: WinningCellEntry; clone: Sprite }[] = [];
+    const clones: { clone: Sprite | AnimatedSprite; targetY: number }[] = [];
 
+    // ── Step 3a: spawn each clone at its reel position (no movement yet) ──
     for (const entry of this.winningEntries) {
       const key = `${entry.reelIndex}_${entry.rowIndex}`;
       if (seen.has(key)) continue;
@@ -243,6 +252,7 @@ export class PixiWinAnimator implements IWinAnimator {
       const cell = entry.cell;
       const reel = this.reels[entry.reelIndex];
 
+      // Hide the original cell so only our clone is visible.
       reel.suspendCell(cell);
       cell.alpha = 0;
 
@@ -250,51 +260,95 @@ export class PixiWinAnimator implements IWinAnimator {
       const layerLocal = this.winFloatLayer.toLocal(globalPos);
       const startX = layerLocal.x;
       const startY = layerLocal.y;
-
       const targetY = startY - symbolSize * 0.5;
 
-      const cloneTexture = cell.sprite.visible
-        ? cell.sprite.texture
-        : (cell as any)._animatedSprite?.texture ?? cell.sprite.texture;
+      // Animated sprite for this symbol; static fallback if none exists.
+      const clone: Sprite | AnimatedSprite =
+        AnimatedSymbolSheet.getInstance().createAnimatedSprite(cell.symbolId) ??
+        new Sprite(cell.sprite.texture);
 
-      const clone = new Sprite(cloneTexture);
       clone.anchor.set(0.5);
       clone.x = startX;
-      clone.y = startY;
+      clone.y = startY;          // stays HERE during Phase 3
 
-      const src = cell.sprite.visible ? cell.sprite : (cell as any)._animatedSprite;
-      clone.scale.copyFrom(src.scale);
+      // ── Correct scale calculation ─────────────────────────────────────────
+      // cell.sprite.scale was computed to fit a specific texture size. The
+      // AnimatedSprite frames may be a different resolution (190×186 from the
+      // sheet). Simply copying the scale number would render the clone at the
+      // wrong display size (the "scaling-out" bug).
+      //
+      // Instead, measure the actual rendered pixel size of the original sprite
+      // and scale the clone to match that same size.
+      const displayW = cell.sprite.width;   // rendered px width  (scale already applied)
+      const displayH = cell.sprite.height;  // rendered px height (scale already applied)
+
+      // clone.width/height at default scale 1 = frame pixel dimensions
+      const nativeW = clone.width;
+      const nativeH = clone.height;
+      if (nativeW > 0 && nativeH > 0) {
+        clone.scale.set(displayW / nativeW, displayH / nativeH);
+      } else {
+        // Fallback if frame size is unknown
+        clone.scale.copyFrom(cell.sprite.scale);
+      }
+
       clone.alpha = 1;
       this.winFloatLayer.addChild(clone);
-      spawned.push({ entry, clone });
+      clones.push({ clone, targetY });
+    }
 
+    if (clones.length === 0) {
+      this._completeOnce();
+      return;
+    }
+
+    this.pendingSliceGroups = clones.length;
+
+    // ── Step 3b: after the in-place animation plays, begin the rise+slice ──
+    const pieceAnimTime = 520;
+    const maxWait =
+      PixiWinAnimator.ANIMATE_IN_PLACE_DURATION +
+      PixiWinAnimator.RISE_DURATION +
+      pieceAnimTime + 400;
+
+    this.winDisplayFallbackTimer = setTimeout(() => {
+      this.winDisplayFallbackTimer = null;
+      this._completeOnce();
+    }, maxWait);
+
+    setTimeout(() => {
+      this._riseAndSliceAll(clones);
+    }, PixiWinAnimator.ANIMATE_IN_PLACE_DURATION);
+  }
+
+  // ─── Phase 4+5: Rise then Slice ──────────────────────────────────────────
+  private _riseAndSliceAll(
+    clones: { clone: Sprite | AnimatedSprite; targetY: number }[]
+  ): void {
+    for (const { clone, targetY } of clones) {
       this.tweenTo(
-        clone,
+        clone as Sprite,  // tweenTo only touches y — safe for AnimatedSprite too
         "y",
         targetY,
         PixiWinAnimator.RISE_DURATION,
         (t) => this._easeOutCubic(t),
         undefined,
-        () => {
-          this._sliceCloneIntoQuadrants(clone);
-        }
+        () => { this._sliceCloneIntoQuadrants(clone); }
       );
     }
-
-    this.pendingSliceGroups = spawned.length;
-
-    const pieceAnimTime = 520;
-    const maxWait = PixiWinAnimator.RISE_DURATION + pieceAnimTime + 400;
-    this.winDisplayFallbackTimer = setTimeout(() => {
-      this.winDisplayFallbackTimer = null;
-      this._completeOnce();
-    }, maxWait);
   }
 
-  private _sliceCloneIntoQuadrants(clone: Sprite): void {
+  private _sliceCloneIntoQuadrants(clone: Sprite | AnimatedSprite): void {
     if (clone.parent) {
       this.winFloatLayer.removeChild(clone);
     }
+
+    // If the clone is an AnimatedSprite, stop it and capture its current frame
+    // texture so slicing operates on a stable, non-animating image.
+    if (clone instanceof AnimatedSprite) {
+      clone.stop();
+    }
+
     const texture = clone.texture;
     const texW = texture.width;
     const texH = texture.height;
@@ -407,6 +461,8 @@ export class PixiWinAnimator implements IWinAnimator {
   private _clearFloatingSprites(): void {
     while (this.winFloatLayer.children.length > 0) {
       const child = this.winFloatLayer.children[0];
+      // Stop animation before destroying to avoid PIXI ticker warnings.
+      if (child instanceof AnimatedSprite) child.stop();
       this.winFloatLayer.removeChild(child);
       child.destroy();
     }

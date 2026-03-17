@@ -1,6 +1,6 @@
 //GameController.ts
 import type { SpinConfig, SpinOutcome, WinningPosition } from "../domain/SpinEngine";
-import type { IGameSession, ISpinEvaluator, ISpinResultGenerator } from "./ports";
+import type { IGameSession, ISpinEvaluator, ISpinResultGenerator, IScatterService } from "./ports";
 import type { GameEvent, GameEventListener, SpinKind } from "./events";
 
 export interface GameControllerConfig {
@@ -64,11 +64,19 @@ export class GameController {
   private currentSpinTotalPayout = 0;
   private lastWinningPositions: WinningPosition[] = [];
 
+  /**
+   * Tracks the maximum number of scatters awarded *during the current spin sequence*
+   * (initial spin + cascades). This prevents awarding the same scatters multiple times
+   * if they persist during cascades.
+   */
+  private lastAwardedScatterCount = 0;
+
   constructor(
     private readonly config: GameControllerConfig,
     private readonly session: IGameSession,
     private readonly spinEvaluator: ISpinEvaluator,
-    private readonly spinResultGenerator: ISpinResultGenerator
+    private readonly spinResultGenerator: ISpinResultGenerator,
+    private readonly scatterService: IScatterService
   ) { }
 
   // ── Events ──────────────────────────────────────────────────────────────
@@ -139,6 +147,7 @@ export class GameController {
   }
 
   onWinSequenceFinished(): void {
+
     if (this.lastWinningPositions.length === 0) {
       this.resolveContinuation();
       return;
@@ -214,13 +223,15 @@ export class GameController {
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: false });
     }
 
-    // New paid spin resets the per-spin total. Free-spin cascades keep accumulating within their own spin.
-    if (source === "manual" || source === "auto") {
+    // New paid spin or free spin resets the per-spin total and scatter tracking.
+    // This ensures free spins are independent from the base spin's context.
+    if (source === "manual" || source === "auto" || source === "free") {
       this.currentSpinTotalPayout = 0;
       this.pendingFreeSpinsFromScatter = 0;
       this.pendingScatterPositions = [];
       this.postScatterCascadePositions = [];
       this.scatterOnlyTrigger = false;
+      this.lastAwardedScatterCount = 0;
       this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
     }
 
@@ -241,32 +252,43 @@ export class GameController {
     const outcome: SpinOutcome = this.spinEvaluator.evaluate(spinConfig, visibleMatrix, this.session.getBet());
     this.emit({ type: "OutcomeEvaluated", outcome });
 
-    // ── 1. Collect scatter award (always deferred) ──────────────────────────
-    let spinsWonThisStep = 0;
-    const scatterCount = outcome.scatterWin?.count ?? 0;
+    // ── 1. Collect scatter award (centralized logic) ────────────────────────
+    const scatterResult = this.scatterService.evaluate(visibleMatrix);
+    const count = scatterResult.count;
+    let spinsAwardedThisStep = 0;
 
-    if (!this.session.isInFreeSpins()) {
-      if (outcome.scatterWin?.freeSpinsAwarded && outcome.scatterWin.freeSpinsAwarded > 0) {
-        spinsWonThisStep = outcome.scatterWin.freeSpinsAwarded;
+    // Rule: Award if count threshold met (3+) AND it's more than we've already handled in this sequence.
+    if (count >= 3 && count > this.lastAwardedScatterCount) {
+      // Logic for "upgrades": if we already awarded 10 for 3 scatters, and now have 4, we award +2 more (total 12).
+      const currentConfigAward = scatterResult.freeSpinsAwarded;
+      const previouslyClaimedInSequence = this.lastAwardedScatterCount >= 3
+        ? (this.pendingFreeSpinsFromScatter) // Total already queued in this sequence
+        : 0;
+
+      const delta = currentConfigAward - previouslyClaimedInSequence;
+
+      if (delta > 0) {
+        spinsAwardedThisStep = delta;
+        this.pendingFreeSpinsFromScatter += delta;
+        this.pendingScatterPositions = scatterResult.positions;
+
+        // If this is the FIRST trigger in the sequence, mark scatter-only if no line wins
+        if (this.lastAwardedScatterCount === 0 && outcome.winningPositions.length === 0) {
+          this.scatterOnlyTrigger = true;
+        }
       }
-    } else {
-      if (outcome.scatterWin?.freeSpinsAwarded && outcome.scatterWin.freeSpinsAwarded > 0) {
-        spinsWonThisStep = outcome.scatterWin.freeSpinsAwarded;
-      }
+      this.lastAwardedScatterCount = count;
     }
 
-    // Always queue scatter — resolve AFTER all wins/cascades settle.
-    if (spinsWonThisStep > 0) {
-      this.pendingFreeSpinsFromScatter += spinsWonThisStep;
-      // Store positions for the animation (overwrite is fine — last scatter wins).
-      if (outcome.scatterPositions.length > 0) {
-        this.pendingScatterPositions = outcome.scatterPositions;
-      }
-      // Track whether this step had NO line wins — scatter-only trigger skips cascade
-      if (outcome.winningPositions.length === 0) {
-        this.scatterOnlyTrigger = true;
-      }
-    }
+    // Attach scatter info back to outcome for UI/Event transparency
+    // We show the FULL award for the current count in the outcome event.
+    outcome.scatterWin = (count >= 3) ? {
+      symbol: scatterResult.symbol,
+      count: count,
+      payout: 0,
+      freeSpinsAwarded: scatterResult.freeSpinsAwarded
+    } : null;
+    outcome.scatterPositions = scatterResult.positions;
 
     // ── 2. Award line win payout ─────────────────────────────────────────────
     if (outcome.totalPayout > 0) {
@@ -280,7 +302,7 @@ export class GameController {
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
       this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
       this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText: "" });
-    } else if (spinsWonThisStep === 0) {
+    } else if (spinsAwardedThisStep === 0) {
       this.emit({ type: "ResultTextChanged", text: "" });
     }
 
@@ -319,9 +341,11 @@ export class GameController {
       // Fire the scatter visual sequence. onScatterSequenceFinished() will
       // call resolveContinuation() again once the animation completes.
       if (positions.length > 0) {
-        // Only cascade if there were line wins — scatter-only spins go straight
-        // to free spin activation after the bonus animation completes.
-        if (!scatterOnly) {
+        // ONLY trigger a "scatter removal cascade" (dropping new symbols to fill holes)
+        // if we are ALREADY in free spins (i.e. this is a re-trigger).
+        // For the INITIAL trigger from Normal Mode, we skip the cascade to ensure
+        // a completely fresh board for the first Free Spin.
+        if (isRetrigger) {
           this.postScatterCascadePositions = positions;
         }
         this.scatterSequenceActive = true;

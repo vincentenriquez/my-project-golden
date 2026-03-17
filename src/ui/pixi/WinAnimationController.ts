@@ -47,7 +47,9 @@ export class WinAnimationController {
   constructor(
     private readonly tweenTo: TweenToFn,
     private readonly bounceOut: (t: number) => number,
-    private readonly symbolPicker: () => number
+    private readonly symbolPicker: () => number,
+    private readonly wildAllowedReelIndices: Set<number>,  // ← ADD
+    private readonly symbolPickerExcludingWild: () => number // ← ADD
   ) {}
 
   /**
@@ -106,7 +108,11 @@ export class WinAnimationController {
 
       const numEmpty = empty.size;
       const newSyms: number[] = [];
-      for (let i = 0; i < numEmpty; i++) newSyms.push(this.symbolPicker());
+      const pick = this.wildAllowedReelIndices.has(ri)
+        ? this.symbolPicker
+        : this.symbolPickerExcludingWild;
+
+      for (let i = 0; i < numEmpty; i++) newSyms.push(pick());
 
       const newColumn = [...newSyms, ...survivors.map((s) => s.sym)];
 
@@ -124,17 +130,7 @@ export class WinAnimationController {
 
         const newSym = newColumn[row];
 
-        if (newSym === WILD_SYMBOL_ID || newSym === SCATTER_SYMBOL_ID) {
-          cell.clearAnimated();
-          const frames = getAnimationFrames(newSym);
-          if (frames.length > 0) {
-            cell.setAnimated(frames);
-          } else {
-            const tex = reel.getTexture(newSym);
-            if (tex) cell.setTexture(tex, newSym);
-          }
-        } else {
-          cell.clearAnimated();
+        if (cell.symbolId !== newSym) {
           const tex = reel.getTexture(newSym);
           if (tex) cell.setTexture(tex, newSym);
         }

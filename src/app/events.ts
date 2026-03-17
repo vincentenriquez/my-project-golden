@@ -1,5 +1,4 @@
 //events.ts
-
 import type { SpinOutcome, WinningPosition } from "../domain/SpinEngine";
 
 export type SpinKind = "paid" | "free";
