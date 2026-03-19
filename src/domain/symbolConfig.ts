@@ -26,7 +26,7 @@ export const TOTAL_WAYS = 243;
 
 /** Symbol weights for weighted RNG (higher = more common) */
 export const SYMBOL_WEIGHTS: number[] = [
-  30, 28, 26, 24, 20, 18, 10, 8, 5, 30,
+  30, 28, 26, 24, 20, 18, 10, 8, 5, 3,
 ];
 
 /** Paytable: [symbolId][count] => payout multiplier per bet */
@@ -55,7 +55,7 @@ export const PAYTABLE: number[][] = [
 
 /** Scatter count -> free spins awarded (retrigger during bonus uses same table). */
 export const FREE_SPINS_AWARDED: Record<number, number> = {
-  3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7
+  3: 2, 4: 4, 5: 6, 6: 8, 7: 10, 8: 12, 9: 14
 };
 
 /**

@@ -1,10 +1,11 @@
 //events.ts
 import type { SpinOutcome, WinningPosition } from "../domain/SpinEngine";
+import type { GamePhase } from "../domain/GamePhase";
 
 export type SpinKind = "paid" | "free";
 
 export type GameEvent =
-  | { type: "SpinBlocked"; reason: "running" | "winLock" | "autoSpinActive" | "insufficientCredits" }
+  | { type: "SpinBlocked"; reason: "running" | "winLock" | "autoSpinActive" | "insufficientCredits" | "postBonus" }
   | { type: "SpinStarted"; kind: SpinKind; bet: number; creditsBefore: number; creditsAfter: number }
   | { type: "SpinToResultRequested"; resultPerReel: number[][] }
   | { type: "SpinStopped"; visibleMatrix: number[][] }
@@ -21,6 +22,12 @@ export type GameEvent =
   | { type: "CascadeRequested"; winningPositions: WinningPosition[] }
   | { type: "ScatterCascadeRequested"; scatterPositions: WinningPosition[] }
   | { type: "RequestNextSpin"; afterMs: number; reason: "freeSpin" | "autoSpin" }
-  | { type: "SpinFinished" };
+  | { type: "SpinFinished" }
+  | { type: "BonusCompleted"; totalWin: number; bet: number }
+  | { type: "BonusResultDismissed" }
+  | { type: "PostBonusTransitionStarted" }
+  | { type: "PostBonusTransitionComplete" }
+  | { type: "GamePhaseChanged"; from: GamePhase; to: GamePhase }
+  | { type: "BuyFreeSpinsBlocked"; reason: "running" | "winLock" | "inFreeSpins" | "autoSpinActive" | "insufficientCredits" };
 
 export type GameEventListener = (event: GameEvent) => void;

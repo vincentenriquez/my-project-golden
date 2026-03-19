@@ -1,5 +1,7 @@
 //GameController.ts
 import type { SpinConfig, SpinOutcome, WinningPosition } from "../domain/SpinEngine";
+import { SCATTER_SYMBOL_ID } from "../domain/symbolConfig";
+import { GamePhase } from "../domain/GamePhase";
 import type { IGameSession, ISpinEvaluator, ISpinResultGenerator, IScatterService } from "./ports";
 import type { GameEvent, GameEventListener, SpinKind } from "./events";
 
@@ -13,6 +15,8 @@ export interface GameControllerConfig {
   initialCredits: number;
   initialBet: number;
   autoSpinCount: number;
+  buyFreeSpinsCount: number;
+  buyFreeSpinsCostMultiplier: number;
 }
 
 export type SpinRequestSource = "manual" | "auto" | "free";
@@ -34,13 +38,25 @@ export type SpinRequestSource = "manual" | "auto" | "free";
 export class GameController {
   private readonly listeners = new Set<GameEventListener>();
 
+  private phase: GamePhase = GamePhase.Normal;
   private running = false;
   private winLock = false;
   private winSequenceComplete = true;
   private winDisplayComplete = true;
+  private lastStartedSpinKind: SpinKind | null = null;
 
   /** True while the scatter bonus animation (highlight → float → slice) is running. */
   private scatterSequenceActive = false;
+
+  /**
+   * Special-case flow for `buyFreeSpins()`:
+   * show a forced "exactly 3 scatters" visual spin first, then run the normal
+   * scatter-mode transition (highlight → intro → greetings).
+   *
+   * During this prelude spin we do NOT evaluate wins/scatters.
+   */
+  private buyPreludeScatterActive = false;
+  private buyPreludeFreeSpinsAwarded = 0;
 
   /**
    * After scatter sequence completes: run win sequence, award free spins, or resolve.
@@ -62,6 +78,10 @@ export class GameController {
   private scatterOnlyTrigger = false;
 
   private currentSpinTotalPayout = 0;
+  /** Accumulates winnings across the whole free-spin bonus series. */
+  private bonusTotalPayout = 0;
+  /** Cascade payout multiplier within the current spin sequence (starts at 1). */
+  private cascadeMultiplier = 1;
   private lastWinningPositions: WinningPosition[] = [];
 
   /**
@@ -93,21 +113,43 @@ export class GameController {
   getCredits(): number { return this.session.getCredits(); }
   getBet(): number { return this.session.getBet(); }
   getRunning(): boolean { return this.running; }
+  getPhase(): GamePhase { return this.phase; }
   getInFreeSpins(): boolean { return this.session.isInFreeSpins(); }
   getAutoSpinActive(): boolean { return this.session.isAutoSpinActive(); }
   getAutoSpinsRemaining(): number { return this.session.getAutoSpinsRemaining(); }
+
+  private isInPostBonusPhase(): boolean {
+    return this.phase === GamePhase.PostBonusSummary || this.phase === GamePhase.PostBonusTransition;
+  }
 
   canSpin(): boolean {
     return (
       !this.running &&
       !this.session.isAutoSpinActive() &&
       !this.winLock &&
-      !this.scatterSequenceActive
+      !this.scatterSequenceActive &&
+      !this.isInPostBonusPhase()
     );
   }
 
   canStartAutoSpin(): boolean {
-    return !this.running && !this.session.isAutoSpinActive() && !this.session.isInFreeSpins();
+    return !this.running && !this.session.isAutoSpinActive() && !this.session.isInFreeSpins() && !this.isInPostBonusPhase();
+  }
+
+  canBuyFreeSpins(): boolean {
+    return (
+      !this.running &&
+      !this.winLock &&
+      !this.scatterSequenceActive &&
+      !this.session.isInFreeSpins() &&
+      !this.session.isAutoSpinActive() &&
+      !this.isInPostBonusPhase() &&
+      this.session.getCredits() >= this.getBuyFreeSpinsCost()
+    );
+  }
+
+  getBuyFreeSpinsCost(): number {
+    return this.session.getBet() * this.config.buyFreeSpinsCostMultiplier;
   }
 
   // ── Use cases ───────────────────────────────────────────────────────────
@@ -135,6 +177,43 @@ export class GameController {
     this.emit({ type: "AutoSpinChanged", active: false, remaining: 0 });
   }
 
+  buyFreeSpins(): void {
+    if (this.running) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "running" });
+      return;
+    }
+    if (this.winLock) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "winLock" });
+      return;
+    }
+    if (this.session.isInFreeSpins()) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "inFreeSpins" });
+      return;
+    }
+    if (this.session.isAutoSpinActive()) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "autoSpinActive" });
+      return;
+    }
+
+    const cost = this.getBuyFreeSpinsCost();
+    if (this.session.getCredits() < cost) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "insufficientCredits" });
+      return;
+    }
+
+    const creditsBefore = this.session.getCredits();
+    this.session.addCredits(-cost);
+    const creditsAfter = this.session.getCredits();
+    this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: false });
+
+    const count = this.config.buyFreeSpinsCount;
+    this.buyPreludeFreeSpinsAwarded = count;
+    this.awardFreeSpinsWithPresentation(count, false);
+
+    // Prelude spin first; onSpinStopped() will intercept and then start scatter mode.
+    this.startBuyPreludeScatterSpin();
+  }
+
   requestSpin(source: SpinRequestSource): void {
     this.startSpinInternal(source);
   }
@@ -143,6 +222,31 @@ export class GameController {
   onSpinStopped(visibleMatrix: number[][]): void {
     this.running = false;
     this.emit({ type: "SpinStopped", visibleMatrix });
+
+    if (this.buyPreludeScatterActive) {
+      this.buyPreludeScatterActive = false;
+
+      // Collect the forced scatter positions from the prelude result.
+      const scatterPositions: WinningPosition[] = [];
+      for (let rowIndex = 0; rowIndex < visibleMatrix.length; rowIndex++) {
+        const row = visibleMatrix[rowIndex];
+        for (let reelIndex = 0; reelIndex < row.length; reelIndex++) {
+          if (row[reelIndex] === SCATTER_SYMBOL_ID) {
+            scatterPositions.push({ reelIndex, rowIndex });
+          }
+        }
+      }
+
+      this.scatterSequenceActive = true;
+      this.emit({
+        type: "ScatterBonusSequenceRequested",
+        scatterPositions,
+        freeSpinsAwarded: this.buyPreludeFreeSpinsAwarded,
+        isRetrigger: false,
+      });
+      return;
+    }
+
     this.evaluateStep(visibleMatrix);
   }
 
@@ -152,6 +256,9 @@ export class GameController {
       this.resolveContinuation();
       return;
     }
+    // A cascade only starts AFTER the win highlight sequence has finished.
+    // Increase the multiplier now so the next evaluation (post-cascade) uses it.
+    this.cascadeMultiplier += 1;
     this.emit({ type: "CascadeRequested", winningPositions: this.lastWinningPositions });
   }
 
@@ -191,13 +298,50 @@ export class GameController {
     this.tryReleaseWinLock();
   }
 
+  /**
+   * Called by UI after the player dismisses the bonus result screen.
+   * Enters PostBonusTransition phase — UI must call onPostBonusTransitionComplete()
+   * once the visual transition (scatter outro, theme reset) finishes.
+   */
+  onBonusResultDismissed(): void {
+    this.setPhase(GamePhase.PostBonusTransition);
+    this.emit({ type: "BonusResultDismissed" });
+    this.emit({ type: "PostBonusTransitionStarted" });
+  }
+
+  /**
+   * Called by UI after the post-bonus visual transition (scatter outro, theme swap)
+   * completes. Cleans up bonus state and returns to Normal mode.
+   */
+  onPostBonusTransitionComplete(): void {
+    this.session.endFreeSpinSeries();
+    this.bonusTotalPayout = 0;
+    this.currentSpinTotalPayout = 0;
+
+    this.setPhase(GamePhase.Normal);
+    this.emit({ type: "FreeSpinsChanged", remaining: 0, mode: "ended" });
+    this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+    this.emit({ type: "PostBonusTransitionComplete" });
+    this.emit({ type: "SpinFinished" });
+
+    this.winLock = false;
+    this.winSequenceComplete = true;
+    this.winDisplayComplete = true;
+  }
+
   // ── Internal flow ───────────────────────────────────────────────────────
   private startSpinInternal(source: SpinRequestSource): void {
+    if (this.isInPostBonusPhase()) {
+      this.emit({ type: "SpinBlocked", reason: "postBonus" });
+      return;
+    }
     if (this.running) {
       this.emit({ type: "SpinBlocked", reason: "running" });
       return;
     }
-    if (this.winLock) {
+    // winLock prevents *manual* spins during win presentation.
+    // It should not block controller-scheduled continuation spins (free/auto).
+    if (this.winLock && source === "manual") {
       this.emit({ type: "SpinBlocked", reason: "winLock" });
       return;
     }
@@ -206,41 +350,115 @@ export class GameController {
       return;
     }
 
-    const kind: SpinKind = this.session.isInFreeSpins() ? "free" : "paid";
+    const isFreeSpin = this.session.isInFreeSpins();
+    const kind: SpinKind = isFreeSpin ? "free" : "paid";
     const bet = this.session.getBet();
 
     const creditsBefore = this.session.getCredits();
 
-    // Deduct for ALL spins, including free spins
-    if (!this.session.hasEnoughCreditsForBet()) {
-      this.emit({ type: "SpinBlocked", reason: "insufficientCredits" });
-      return;
+    // Paid spins require enough credits and deduct the bet; free spins are always allowed.
+    if (!isFreeSpin) {
+      if (!this.session.hasEnoughCreditsForBet()) {
+        this.emit({ type: "SpinBlocked", reason: "insufficientCredits" });
+        return;
+      }
+      this.session.deductBetForSpin();
     }
-    this.session.deductBetForSpin();
 
     const creditsAfter = this.session.getCredits();
     if (creditsAfter !== creditsBefore) {
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: false });
     }
 
-    // New paid spin or free spin resets the per-spin total and scatter tracking.
-    // This ensures free spins are independent from the base spin's context.
+    // Every spin resets the per-spin total and scatter tracking.
     if (source === "manual" || source === "auto" || source === "free") {
       this.currentSpinTotalPayout = 0;
+      this.cascadeMultiplier = 1;
       this.pendingFreeSpinsFromScatter = 0;
       this.pendingScatterPositions = [];
       this.postScatterCascadePositions = [];
       this.scatterOnlyTrigger = false;
       this.lastAwardedScatterCount = 0;
-      this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+      // Total win display behavior:
+      // - Paid spin: reset TOTAL WIN at start of the paid spin.
+      // - Free-spin series: do NOT reset TOTAL WIN per free spin; it represents the bonus total.
+      if (!isFreeSpin) {
+        this.bonusTotalPayout = 0;
+        this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+      }
     }
 
     this.running = true;
     this.winSequenceComplete = false;
     this.lastWinningPositions = [];
+    this.lastStartedSpinKind = kind;
 
     this.emit({ type: "SpinStarted", kind, bet, creditsBefore, creditsAfter });
     const resultPerReel = this.spinResultGenerator.generate({ weighted: true });
+    this.emit({ type: "SpinToResultRequested", resultPerReel });
+  }
+
+  /**
+   * Starts a bet-free visual prelude spin for `buyFreeSpins()`:
+   * - lands with exactly 3 scatters (reels 0..2, rowIndex 0)
+   * - avoids line wins by using unique per-reel symbols for non-scatter cells
+   * - `onSpinStopped()` will intercept this spin and skip win/scatter evaluation
+   */
+  private startBuyPreludeScatterSpin(): void {
+    if (this.running) {
+      this.emit({ type: "SpinBlocked", reason: "running" });
+      return;
+    }
+    if (!this.session.isInFreeSpins()) {
+      // Defensive: buyFreeSpins() awards free spins first, so this should never happen.
+      this.session.awardFreeSpins(this.buyPreludeFreeSpinsAwarded);
+    }
+
+    const isFreeSpin = this.session.isInFreeSpins();
+    const kind: SpinKind = isFreeSpin ? "free" : "paid";
+    const bet = this.session.getBet();
+
+    const creditsBefore = this.session.getCredits();
+    const creditsAfter = creditsBefore; // visual-only prelude spin
+
+    // Reset per-spin bookkeeping (mirror startSpinInternal's reset behavior).
+    this.currentSpinTotalPayout = 0;
+    this.cascadeMultiplier = 1;
+    this.pendingFreeSpinsFromScatter = 0;
+    this.pendingScatterPositions = [];
+    this.postScatterCascadePositions = [];
+    this.scatterOnlyTrigger = false;
+    this.lastAwardedScatterCount = 0;
+
+    this.running = true;
+    this.winSequenceComplete = false;
+    this.winDisplayComplete = true;
+    this.lastWinningPositions = [];
+    this.lastStartedSpinKind = kind;
+
+    this.emit({ type: "SpinStarted", kind, bet, creditsBefore, creditsAfter });
+
+    const reelsCount = this.config.reelsCount;
+    const symbolsPerReel = this.config.symbolsPerReel;
+    const scatterReelCount = Math.min(3, reelsCount);
+
+    // [reelIndex][rowIndex]
+    const forceMatrix: number[][] = Array.from({ length: reelsCount }, (_, reelIndex) => {
+      const column: number[] = [];
+      for (let rowIndex = 0; rowIndex < symbolsPerReel; rowIndex++) {
+        const isScatterCell = rowIndex === 0 && reelIndex < scatterReelCount;
+        const nonScatterSymbol = reelIndex % 8; // 0..7 (avoid wild=8 and scatter=9)
+        column.push(isScatterCell ? SCATTER_SYMBOL_ID : nonScatterSymbol);
+      }
+      return column;
+    });
+
+    this.buyPreludeScatterActive = true;
+
+    const resultPerReel = this.spinResultGenerator.generate({
+      forceMatrix,
+    });
+
     this.emit({ type: "SpinToResultRequested", resultPerReel });
   }
 
@@ -292,16 +510,19 @@ export class GameController {
 
     // ── 2. Award line win payout ─────────────────────────────────────────────
     if (outcome.totalPayout > 0) {
+      const effectivePayout = outcome.totalPayout * this.cascadeMultiplier;
       const creditsBefore = this.session.getCredits();
-      this.session.addCredits(outcome.totalPayout);
+      this.session.addCredits(effectivePayout);
       const creditsAfter = this.session.getCredits();
       this.winLock = true;
       this.winSequenceComplete = false;
       this.winDisplayComplete = false;
-      this.currentSpinTotalPayout += outcome.totalPayout;
+      this.currentSpinTotalPayout += effectivePayout;
+      if (this.session.isInFreeSpins()) this.bonusTotalPayout += effectivePayout;
       this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: true });
-      this.emit({ type: "TotalWinChanged", totalSoFar: this.currentSpinTotalPayout, animate: true });
-      this.emit({ type: "WinAmountAwarded", hitAmount: outcome.totalPayout, totalSoFar: this.currentSpinTotalPayout, bonusText: "" });
+      const totalSoFar = this.session.isInFreeSpins() ? this.bonusTotalPayout : this.currentSpinTotalPayout;
+      this.emit({ type: "TotalWinChanged", totalSoFar, animate: true });
+      this.emit({ type: "WinAmountAwarded", hitAmount: effectivePayout, totalSoFar, bonusText: "" });
     } else if (spinsAwardedThisStep === 0) {
       this.emit({ type: "ResultTextChanged", text: "" });
     }
@@ -361,18 +582,29 @@ export class GameController {
     }
 
     if (this.session.isInFreeSpins()) {
-      if (this.session.getFreeSpinsRemaining() > 0) {
+      // IMPORTANT: only consume a free spin after a FREE spin actually ran.
+      // When we first enter free spins, resolveContinuation() is called before any free spin starts.
+      if (this.lastStartedSpinKind === "free") {
         const remaining = this.session.consumeFreeSpin();
-        this.emit({ type: "FreeSpinsChanged", remaining, mode: "updated" });
-        // Wait 1200ms before next free spin (gives time for wins/cascades to visually clear)
-        this.emit({ type: "RequestNextSpin", afterMs: 1200, reason: "freeSpin" });
+        if (remaining > 0) {
+          this.emit({ type: "FreeSpinsChanged", remaining, mode: "updated" });
+          this.emit({ type: "RequestNextSpin", afterMs: 1200, reason: "freeSpin" });
+        } else {
+          // Free spins exhausted — enter PostBonusSummary phase.
+          // BonusResultPanel is shown; user dismiss → onBonusResultDismissed → PostBonusTransition.
+          this.setPhase(GamePhase.PostBonusSummary);
+          this.emit({
+            type: "BonusCompleted",
+            totalWin: this.bonusTotalPayout,
+            bet: this.session.getBet(),
+          });
+        }
       } else {
-        this.session.endFreeSpinSeries();
-        this.emit({ type: "FreeSpinsChanged", remaining: 0, mode: "ended" });
-        this.emit({ type: "ResultTextChanged", text: "Bonus finished!" });
-        this.emit({ type: "SpinFinished" });
-        this.tryReleaseWinLock();
+        // Entered/retriggered free spins: kick off the first free spin.
+        this.setPhase(GamePhase.FreeSpins);
+        this.emit({ type: "RequestNextSpin", afterMs: 0, reason: "freeSpin" });
       }
+
       return;
     }
 
@@ -407,14 +639,23 @@ export class GameController {
     }
 
     this.session.awardFreeSpins(count);
+    if (!isRetrigger) {
+      this.setPhase(GamePhase.ScatterIntro);
+      this.bonusTotalPayout = 0;
+      this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+    }
     this.emit({
       type: "FreeSpinsChanged",
       remaining: this.session.getFreeSpinsRemaining(),
       mode: isRetrigger ? "updated" : "entered",
     });
-    // if (!skipResultText) {
-    //   this.emit({ type: "ResultTextChanged", text: `${count} Free Spins!` });
-    // }
+  }
+
+  private setPhase(next: GamePhase): void {
+    if (this.phase === next) return;
+    const from = this.phase;
+    this.phase = next;
+    this.emit({ type: "GamePhaseChanged", from, to: next });
   }
 }
 

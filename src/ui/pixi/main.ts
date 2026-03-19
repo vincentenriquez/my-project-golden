@@ -36,6 +36,8 @@ import { FireFrameEffect } from "./FireFrameEffect";
 import { WinCountUp } from "../shared/WinCountUp";
 import { SlotInfoContainer } from "./SlotInfoContainer";
 import { GreetingsScatterPanel } from "./GreetingsScatterPanel";
+import { BonusResultPanel } from "./BonusResultPanel";
+import { PostBonusTransitionController } from "./PostBonusTransitionController";
 import { gsap } from "gsap";
 
 // ---------- Layout constants ----------
@@ -210,6 +212,7 @@ let winAnimator: PixiWinAnimator;
 let fireflyEffect: FireflyEffect;
 let fireFrameEffect: FireFrameEffect;
 let greetingsScatterPanel: GreetingsScatterPanel;
+let bonusResultPanel: BonusResultPanel;
 let uiTick: ((deltaTime: number, deltaMS: number) => void) | null = null;
 
 // ---------- Helper: GameController factory (composition root: DDD + SOLID) ----------
@@ -225,10 +228,13 @@ function createGameControllerInstance(
     initialCredits: number;
     initialBet: number;
     autoSpinCount: number;
+    buyFreeSpinsCount: number;
+    buyFreeSpinsCostMultiplier: number;
   },
   uiDeps: {
     creditsText: Text;
     resultText: Text;
+    multiplierText: Text;
     amountLabel: Text;
     slotInfo: SlotInfoContainer;
     totalWinText: Text;
@@ -308,8 +314,42 @@ function createGameControllerInstance(
   let balanceAtWinStart = controller.getCredits();
   let totalWinDisplayValue = 0;
   let betDisplayValue = controller.getBet();
+  let cascadeStepCount = 0;
+  let winSequenceTimers: number[] = [];
+  let winDisplayMode: "normal" | "cascadeBase" = "normal";
+  let cascadeFinalHitAmount = 0;
+  let cascadeMultiplierForDisplay = 1;
+
+  const clearWinSequenceTimers = () => {
+    for (const id of winSequenceTimers) clearTimeout(id);
+    winSequenceTimers = [];
+  };
 
   const winCountUp = new WinCountUp((displayValue, isDone) => {
+    if (winDisplayMode === "cascadeBase") {
+      resultView.setText(`${formatAmount(displayValue)}${pendingBonusText}`);
+      if (isDone) {
+        // Wait 400ms, show xN, then show "= final", then release win lock.
+        const t1 = window.setTimeout(() => {
+          uiDeps.multiplierText.text = `x${cascadeMultiplierForDisplay}`;
+          uiDeps.multiplierText.visible = true;
+
+          const t2 = window.setTimeout(() => {
+            resultView.setText(`${formatAmount(cascadeFinalHitAmount)}${pendingBonusText}`);
+
+            const t3 = window.setTimeout(() => {
+              winDisplayMode = "normal";
+              controller.onWinDisplayFinished();
+            }, 400);
+            winSequenceTimers.push(t3);
+          }, 400);
+          winSequenceTimers.push(t2);
+        }, 400);
+        winSequenceTimers.push(t1);
+      }
+      return;
+    }
+
     resultView.setText(`${formatAmount(displayValue)}${pendingBonusText}`);
     if (isDone) controller.onWinDisplayFinished();
   });
@@ -325,9 +365,26 @@ function createGameControllerInstance(
     betView.setText(formatAmount(displayValue));
   });
 
+  const postBonusTransition = new PostBonusTransitionController({
+    scatterIntroEffect,
+    slotInfoView,
+    changeFrame: uiDeps.changeFrame,
+    setScatterModeUi: uiDeps.setScatterModeUi,
+    setStarfieldWarp: uiDeps.setStarfieldWarp,
+    fireFrameEffect,
+  });
+
   // Subscribe to app events and drive PIXI/UI.
   controller.subscribe((event: GameEvent) => {
     switch (event.type) {
+      case "SpinStarted": {
+        cascadeStepCount = 0;
+        clearWinSequenceTimers();
+        winDisplayMode = "normal";
+        uiDeps.multiplierText.visible = false;
+        uiDeps.multiplierText.text = "";
+        break;
+      }
       case "SpinBlocked": {
         if (event.reason === "insufficientCredits") {
           resultView.setText("Not enough credits!");
@@ -358,13 +415,15 @@ function createGameControllerInstance(
       }
       case "ResultTextChanged": {
         pendingBonusText = "";
+        clearWinSequenceTimers();
+        winDisplayMode = "normal";
         winCountUp.cancel();
         resultView.setText(event.text);
         break;
       }
       case "WinAmountAwarded": {
         pendingBonusText = event.bonusText;
-        resultView.setText(`${formatAmount(0)}${pendingBonusText}`);
+        clearWinSequenceTimers();
         resultView.alpha = 0;
         resultView.scale = { x: 0.65, y: 0.65 };
         resultView.visible = true;
@@ -378,7 +437,24 @@ function createGameControllerInstance(
         );
         tweenTo(resultView, "alpha", 1, 320, (t) => 1 - Math.pow(1 - t, 2));
 
-        winCountUp.start(event.hitAmount);
+        // Cascade-only multiplier breakdown (x2+).
+        // Only cascades increment cascadeStepCount, so multiplier is (cascadeStepCount + 1).
+        const multiplier = cascadeStepCount + 1;
+        if (multiplier >= 2 && event.hitAmount > 0) {
+          winDisplayMode = "cascadeBase";
+          cascadeMultiplierForDisplay = multiplier;
+          cascadeFinalHitAmount = event.hitAmount;
+
+          // Hide multiplier until after the base win count-up finishes.
+          uiDeps.multiplierText.visible = false;
+
+          const baseHit = event.hitAmount / multiplier;
+          winCountUp.start(baseHit);
+        } else {
+          winDisplayMode = "normal";
+          resultView.setText(`${formatAmount(0)}${pendingBonusText}`);
+          winCountUp.start(event.hitAmount);
+        }
         break;
       }
       case "AutoSpinChanged": {
@@ -391,20 +467,28 @@ function createGameControllerInstance(
         }
         break;
       }
+      case "BonusCompleted": {
+        bonusResultPanel.show(
+          { totalWin: event.totalWin, bet: event.bet },
+          () => controller.onBonusResultDismissed(),
+        );
+        break;
+      }
       case "FreeSpinsChanged": {
-        if (event.mode === "ended") {
-          slotInfoView.setDefault();
-          uiDeps.changeFrame("/Final_Frame.png");
-          uiDeps.setScatterModeUi(false);
-          uiDeps.setStarfieldWarp(false);
-          fireFrameEffect?.hide();        // ← stop fire animation
-        }
-        else if (event.mode === "entered") {
+        if (event.mode === "entered") {
           slotInfoView.setFreeSpin(event.remaining);
-          //uiDeps.setStarfieldWarp(true);
-          //fireFrameEffect?.show();        // ← start fire animation
+        } else if (event.mode === "updated") {
+          slotInfoView.setFreeSpinCount(event.remaining);
+        } else if (event.mode === "ended") {
+          slotInfoView.setDefault();
         }
-        else slotInfoView.setFreeSpinCount(event.remaining);
+        break;
+      }
+      case "PostBonusTransitionStarted": {
+        postBonusTransition.start(() => controller.onPostBonusTransitionComplete());
+        break;
+      }
+      case "PostBonusTransitionComplete": {
         break;
       }
       case "SpinToResultRequested": {
@@ -451,7 +535,7 @@ function createGameControllerInstance(
               greetingsScatterPanel.show(() => {
                 // User tapped — continue flow to start free spins
                 controller.onScatterSequenceFinished();
-              });
+              }, event.freeSpinsAwarded);
 
               fireFrameEffect?.show();
             });
@@ -460,6 +544,11 @@ function createGameControllerInstance(
         break;
       }
       case "CascadeRequested": {
+        cascadeStepCount += 1;
+        // Only after the first cascade happens: first cascade shows x2.
+        // Set the text now, but reveal it later only if the cascade produces a win.
+        uiDeps.multiplierText.text = `x${cascadeStepCount + 1}`;
+        uiDeps.multiplierText.visible = false;
         reelsPort.cascade(
           {
             reelsCount: controllerConfig.reelsCount,
@@ -483,6 +572,7 @@ function createGameControllerInstance(
       }
       case "SpinFinished": {
         winAnimator.clear();
+        uiDeps.multiplierText.visible = false;
         break;
       }
       case "ScatterCascadeRequested": {
@@ -519,6 +609,12 @@ function createGameControllerInstance(
     balanceCountUp.update(deltaMS);
     totalWinCountUp.update(deltaMS);
     betCountUp.update(deltaMS);
+
+    // Keep multiplier aligned beside the win container text.
+    if (uiDeps.multiplierText.visible) {
+      uiDeps.multiplierText.x = 0;
+      uiDeps.multiplierText.y = uiDeps.resultText.y + 60;
+    }
   };
 
   return controller;
@@ -527,7 +623,12 @@ function createGameControllerInstance(
 await Assets.load([
   ...SYMBOL_ASSETS,
   "/win_container.png",
+  "/you_win_con.png",
+  "/big_win.png",
+  "/mega_win.png",
+  "/epic_win.png",
   "/bgQuickBtn.png",
+  "/BUY%20FREE%20SPINS_(1).png",
   BG_IMAGE,
   SCATTER_BG_IMAGE,
   "/Frame_13.png",
@@ -613,6 +714,7 @@ function buildSlotMachine() {
   greetingsLayer.x = 0;
   greetingsLayer.y = 0;
   greetingsScatterPanel = new GreetingsScatterPanel(app, greetingsLayer, reelBounds);
+  bonusResultPanel = new BonusResultPanel(app, stageOverLayer);
 
   // ── Frame decoration ────────────────────────────────────────────────────────
   const padding = 10;
@@ -698,6 +800,18 @@ function buildSlotMachine() {
   resultText.y = 0;
   resultTextContainer.addChild(resultText);
 
+  // Cascade multiplier indicator (appears after first cascade)
+  const multiplierText = new Text("", new TextStyle({
+    fontSize: 20,
+    fontWeight: "bold",
+    fill: 0xFDF1C0,
+    stroke: 0x000000,
+    fontFamily: "Arial",
+  }));
+  multiplierText.anchor.set(0.5);
+  multiplierText.visible = false;
+  resultTextContainer.addChild(multiplierText);
+
   // ── Spin button ─────────────────────────────────────────────────────────────
   const SPIN_BTN_SIZE = 150;
   const SPIN_BTN_HALF = SPIN_BTN_SIZE / 2;
@@ -736,7 +850,7 @@ function buildSlotMachine() {
     fontSize: 20,
     fontWeight: "bolder",
     fill: 0xFDF1C0,
-    fontFamily: "Arial",
+    fontFamily: "Roboto Serif",
   }));
   spinLabel.anchor.set(0.5);
   spinLabel.x = spinButton.x;
@@ -745,6 +859,149 @@ function buildSlotMachine() {
   overlayLayer.addChild(spinLabel);
 
   spinButton.mask = spinButtonMask;
+
+  // ── Buy Free Spins button (left of spin button) ────────────────────────────
+  const BUY_BTN_W = 130;
+  const BUY_BTN_H = 80;
+  const buyBtnContainer = new Container();
+  buyBtnContainer.x = spinButton.x - SPIN_BTN_SIZE / 2 - BUY_BTN_W / 2 - 165;
+  buyBtnContainer.y = spinButton.y;
+  buyBtnContainer.zIndex = 100;
+
+  const buyBtnBg = new Graphics();
+  buyBtnBg.beginFill(0xd4af37, 0);
+  buyBtnBg.drawRoundedRect(-BUY_BTN_W / 2, -BUY_BTN_H / 2, BUY_BTN_W, BUY_BTN_H, 10);
+  buyBtnBg.endFill();
+  buyBtnContainer.addChild(buyBtnBg);
+
+  const buyBtnLabelSprite = new Sprite(Texture.from("/BUY%20FREE%20SPINS_(1).png"));
+  buyBtnLabelSprite.anchor.set(0.5);
+  buyBtnLabelSprite.x = 0;
+  buyBtnLabelSprite.y = 0;
+  // Scale to fit within button bounds (preserve aspect).
+  const labelPad = 8;
+  const maxW = BUY_BTN_W - labelPad * 2;
+  const maxH = BUY_BTN_H - labelPad * 2;
+  const sx = maxW / buyBtnLabelSprite.texture.width;
+  const sy = maxH / buyBtnLabelSprite.texture.height;
+  const s = Math.min(sx, sy);
+  buyBtnLabelSprite.scale.set(s);
+  buyBtnContainer.addChild(buyBtnLabelSprite);
+  buyBtnContainer.eventMode = "static";
+  buyBtnContainer.cursor = "pointer";
+  overlayLayer.addChild(buyBtnContainer);
+
+  // ── Buy Free Spins confirmation modal (full-screen overlay) ────────────────
+  const buyModalContainer = new Container();
+  buyModalContainer.zIndex = 200;
+  buyModalContainer.visible = false;
+  app.stage.addChild(buyModalContainer);
+
+  const buyModalBg = new Graphics();
+  function resizeBuyModal() {
+    buyModalBg.clear();
+    buyModalBg.beginFill(0x000000, 0.75);
+    buyModalBg.drawRect(0, 0, app.screen.width, app.screen.height);
+    buyModalBg.endFill();
+    buyModalBg.eventMode = "static";
+    buyModalPanel.x = app.screen.width / 2;
+    buyModalPanel.y = app.screen.height / 2;
+  }
+  buyModalContainer.addChild(buyModalBg);
+
+  const buyModalPanel = new Container();
+  buyModalContainer.addChild(buyModalPanel);
+
+  const panelBg = new Graphics();
+  const PANEL_W = 360;
+  const PANEL_H = 260;
+  panelBg.beginFill(0x1a1a2e);
+  panelBg.lineStyle(2, 0xd4af37);
+  panelBg.drawRoundedRect(-PANEL_W / 2, -PANEL_H / 2, PANEL_W, PANEL_H, 16);
+  panelBg.endFill();
+  buyModalPanel.addChild(panelBg);
+
+  const modalTitle = new Text("BUY FREE SPINS", new TextStyle({
+    fontSize: 22, fontWeight: "bold", fill: 0xd4af37, fontFamily: "Arial",
+  }));
+  modalTitle.anchor.set(0.5);
+  modalTitle.y = -PANEL_H / 2 + 40;
+  buyModalPanel.addChild(modalTitle);
+
+  const modalDesc = new Text("", new TextStyle({
+    fontSize: 16, fill: 0xFDF1C0, fontFamily: "Arial", align: "center", wordWrap: true, wordWrapWidth: PANEL_W - 40,
+  }));
+  modalDesc.anchor.set(0.5);
+  modalDesc.y = -10;
+  buyModalPanel.addChild(modalDesc);
+
+  const MODAL_BTN_W = 120;
+  const MODAL_BTN_H = 40;
+
+  const confirmBtn = new Graphics();
+  confirmBtn.beginFill(0x2ecc71);
+  confirmBtn.drawRoundedRect(-MODAL_BTN_W / 2, -MODAL_BTN_H / 2, MODAL_BTN_W, MODAL_BTN_H, 8);
+  confirmBtn.endFill();
+  confirmBtn.x = -80;
+  confirmBtn.y = PANEL_H / 2 - 50;
+  confirmBtn.eventMode = "static";
+  confirmBtn.cursor = "pointer";
+  buyModalPanel.addChild(confirmBtn);
+
+  const confirmLabel = new Text("CONFIRM", new TextStyle({
+    fontSize: 16, fontWeight: "bold", fill: 0xffffff, fontFamily: "Arial",
+  }));
+  confirmLabel.anchor.set(0.5);
+  confirmBtn.addChild(confirmLabel);
+
+  const cancelBtn = new Graphics();
+  cancelBtn.beginFill(0xe74c3c);
+  cancelBtn.drawRoundedRect(-MODAL_BTN_W / 2, -MODAL_BTN_H / 2, MODAL_BTN_W, MODAL_BTN_H, 8);
+  cancelBtn.endFill();
+  cancelBtn.x = 80;
+  cancelBtn.y = PANEL_H / 2 - 50;
+  cancelBtn.eventMode = "static";
+  cancelBtn.cursor = "pointer";
+  buyModalPanel.addChild(cancelBtn);
+
+  const cancelLabel = new Text("CANCEL", new TextStyle({
+    fontSize: 16, fontWeight: "bold", fill: 0xffffff, fontFamily: "Arial",
+  }));
+  cancelLabel.anchor.set(0.5);
+  cancelBtn.addChild(cancelLabel);
+
+  resizeBuyModal();
+  app.renderer.on("resize", resizeBuyModal);
+
+  function showBuyModal() {
+    if (!gameController) return;
+    const cost = gameController.getBuyFreeSpinsCost();
+    const spins = controllerConfig.buyFreeSpinsCount;
+    modalDesc.text = `Purchase ${spins} Free Spins\nCost: ${cost.toFixed(2)} credits\n\nYour balance: ${gameController.getCredits().toFixed(2)}`;
+    buyModalContainer.visible = true;
+  }
+
+  function hideBuyModal() {
+    buyModalContainer.visible = false;
+  }
+
+  buyBtnContainer.on("pointerdown", () => {
+    if (!gameController || !gameController.canBuyFreeSpins()) return;
+    showBuyModal();
+  });
+
+  confirmBtn.on("pointerdown", () => {
+    hideBuyModal();
+    if (gameController) gameController.buyFreeSpins();
+  });
+
+  cancelBtn.on("pointerdown", () => {
+    hideBuyModal();
+  });
+
+  buyModalBg.on("pointerdown", () => {
+    hideBuyModal();
+  });
 
   // ── Controls ─────────────────────────────────────────────────────────────────
   const controlsContainer = new Container();
@@ -978,9 +1235,11 @@ function buildSlotMachine() {
     symbolSize: SYMBOL_SIZE,
     minBet: MIN_BET,
     maxBet: MAX_BET,
-    initialCredits: 1000,
+    initialCredits: 10000000,
     initialBet: 10,
     autoSpinCount: AUTO_SPIN_COUNT,
+    buyFreeSpinsCount: 10,
+    buyFreeSpinsCostMultiplier: 100,
   };
 
   gameController = createGameControllerInstance(
@@ -989,6 +1248,7 @@ function buildSlotMachine() {
     {
       creditsText,
       resultText,
+      multiplierText,
       amountLabel,
       slotInfo,
       totalWinText,
@@ -1003,11 +1263,10 @@ function buildSlotMachine() {
         bg.texture = Texture.from(active ? SCATTER_BG_IMAGE : BG_IMAGE);
         resizeBackground();
 
-        // fireContainer.visible = active;
-
         spinRowContainer.visible = !active;
         bgQuickBtnSprite.visible = !active;
         quickBetContainer.visible = !active;
+        buyBtnContainer.visible = !active;
         minusButton.eventMode = active ? "none" : "static";
         minusButton.alpha = active ? 0.5 : 1;
         plusButton.eventMode = active ? "none" : "static";
@@ -1079,7 +1338,6 @@ function buildSlotMachine() {
     if (fireflyEffect) fireflyEffect.update(ticker);
     reelsPort.updateReelsVisuals();
     if (uiTick) uiTick(ticker.deltaTime, ticker.deltaMS);
-    // Spin lock: disable spin button during win sequence (symbol movement, cascades, WIN text)
     const canSpin = gameController.canSpin();
     spinButton.eventMode = canSpin ? "static" : "none";
     spinButton.alpha = canSpin ? 1 : 0.6;
@@ -1088,15 +1346,19 @@ function buildSlotMachine() {
       spinLabel.alpha = canSpin ? 1 : 0.6;
     }
 
+    const canBuy = gameController.canBuyFreeSpins();
+    buyBtnContainer.eventMode = canBuy ? "static" : "none";
+    buyBtnContainer.alpha = canBuy ? 1 : 0.4;
+
     // Result text background: show/hide together and fit to current text size.
     const showResult = resultText.visible && resultText.text.trim().length > 0;
     resultTextContainer.visible = showResult;
     resultBg.alpha = resultText.alpha;
     if (showResult) {
-      const PAD_X = 15;
+      const PAD_X = 10;
       const PAD_Y = 10;
-      const minW = 100;
-      const minH = 50;
+      const minW = 150;
+      const minH = 100;
       resultBg.width = Math.max(minW, resultText.width + PAD_X * 2);
       resultBg.height = Math.max(minH, resultText.height + PAD_Y * 2);
     }

@@ -25,7 +25,7 @@ export class ScatterIntroEffect {
   private readonly visualSize = 150; // Visual size for scaling
   private readonly gridSpacing = 50; // Tighter spacing for "compressed" look
   private readonly rowSpawnInterval = 200;
-  private readonly gravity = 0.8;
+  private readonly gravity = 1.8;
 
   private static readonly SYMBOL_FRAMES = [
     "/cherry.png",

@@ -5,7 +5,7 @@
  * It waits for the player to tap/click anywhere before proceeding, ensuring
  * that free spins do not start automatically without user interaction.
  */
-import { Application, Container, Sprite, Assets, Rectangle } from "pixi.js";
+import { Application, Assets, Container, Rectangle, Sprite, Text, TextStyle } from "pixi.js";
 
 export interface ReelBounds {
   /** Reel viewport width  in gameContainer local px (REEL_WIDTH × REELS_COUNT). */
@@ -27,6 +27,8 @@ export class GreetingsScatterPanel {
   
   private container: Container;
   private sprite: Sprite | null = null;
+  private freeSpinsCountText: Text | null = null;
+  private tapHintText: Text | null = null;
   private clickHandler: (() => void) | null = null;
   private hiding = false;
 
@@ -51,7 +53,7 @@ export class GreetingsScatterPanel {
    * 
    * @param onTap Callback fired exactly once when the user clicks/taps.
    */
-  show(onTap: () => void): void {
+  show(onTap: () => void, freeSpinsAwarded?: number): void {
     if (this.hiding || this.container.visible) return;
 
     this.container.removeChildren();
@@ -65,6 +67,10 @@ export class GreetingsScatterPanel {
 
     this.sprite = new Sprite(texture);
     this.sprite.anchor.set(0.5);
+    this.freeSpinsCountText?.destroy();
+    this.freeSpinsCountText = null;
+    this.tapHintText?.destroy();
+    this.tapHintText = null;
     
     // Position exactly in the center of the reel mask viewport
     const { frameWidth, frameHeight, originX, originY } = this.bounds;
@@ -74,6 +80,41 @@ export class GreetingsScatterPanel {
     // Fit precisely to the reel width (keeping aspect ratio)
     const scale = frameWidth / this.sprite.texture.width;
     this.sprite.scale.set(scale);
+
+    // Overlay the free-spin total just below "YOU WIN".
+    // We render it as Pixi text so we don't need to generate/modify the PNG file.
+    if (typeof freeSpinsAwarded === "number" && freeSpinsAwarded > 0) {
+      this.freeSpinsCountText = new Text(String(freeSpinsAwarded), new TextStyle({
+        fontSize: 80,
+        fontWeight: "bold",
+        fill: 0xffd700,
+        stroke: 0x000000,
+        strokeThickness: 6,
+        fontFamily: "Arial",
+      }));
+      this.freeSpinsCountText.anchor.set(0.5);
+
+      // Position relative to the sprite itself; anchor is at center, so we place near the upper-middle.
+      // (Tune these ratios if you want tighter alignment with the PNG artwork.)
+      this.freeSpinsCountText.x = 0;
+      // The PNG places "YOU WIN" in the upper third; this ratio lands the number
+      // between "YOU WIN" and the existing "FREE SPINS" caption.
+      this.freeSpinsCountText.y = 10;
+
+      this.sprite.addChild(this.freeSpinsCountText);
+    }
+
+    // Tap hint (moved from BonusResultPanel)
+    this.tapHintText = new Text("Tap anywhere to continue", new TextStyle({
+      fontSize: 16,
+      fill: 0xaaaaaa,
+      fontFamily: "Arial",
+      align: "center",
+    }));
+    this.tapHintText.anchor.set(0.5);
+    this.tapHintText.x = 0;
+    this.tapHintText.y = this.sprite.height / 2 - 26;
+    this.sprite.addChild(this.tapHintText);
 
     this.container.addChild(this.sprite);
     this.container.alpha = 0;
@@ -120,6 +161,10 @@ export class GreetingsScatterPanel {
       this.container.removeChildren();
       this.sprite?.destroy();
       this.sprite = null;
+      this.freeSpinsCountText?.destroy();
+      this.freeSpinsCountText = null;
+      this.tapHintText?.destroy();
+      this.tapHintText = null;
       this.hiding = false;
       
       onComplete?.();
