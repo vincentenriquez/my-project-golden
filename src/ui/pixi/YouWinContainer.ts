@@ -6,7 +6,7 @@ const SHOW_DURATION_MS = 1300;
 function formatAmount(value: number): string {
   const [intPart, decPart] = value.toFixed(2).split(".");
   const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${withSep}.${decPart}`;
+  return `₱${withSep}.${decPart}`;
 }
 
 export class YouWinContainer {

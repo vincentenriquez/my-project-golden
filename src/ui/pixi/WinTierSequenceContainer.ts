@@ -13,7 +13,7 @@ const TIER_ASSETS: Partial<Record<WinTier, string>> = {
 function formatAmount(value: number): string {
   const [intPart, decPart] = value.toFixed(2).split(".");
   const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${withSep}.${decPart}`;
+  return `₱${withSep}.${decPart}`;
 }
 
 function buildTierSequence(highest: WinTier): WinTier[] {

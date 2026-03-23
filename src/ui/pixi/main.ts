@@ -306,7 +306,7 @@ function createGameControllerInstance(
   const formatAmount = (value: number): string => {
     const [intPart, decPart] = value.toFixed(2).split(".");
     const withSeparators = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-    return `${withSeparators}.${decPart}`;
+    return `₱${withSeparators}.${decPart}`;
   };
 
   // HUD animators (UI-owned)
@@ -597,7 +597,7 @@ function createGameControllerInstance(
   // Initial HUD render
   creditsView.setText(formatAmount(controller.getCredits()));
   betView.setText(formatAmount(controller.getBet()));
-  totalWinView.setText("0.00");
+  totalWinView.setText("₱0.00");
   dimOverlayView.setVisible(false);
   resultView.setText("");
 
@@ -628,7 +628,7 @@ await Assets.load([
   "/mega_win.png",
   "/epic_win.png",
   "/bgQuickBtn.png",
-  "/BUY%20FREE%20SPINS_(1).png",
+  "/buy_spin.png",
   BG_IMAGE,
   SCATTER_BG_IMAGE,
   "/Frame_13.png",
@@ -793,7 +793,7 @@ function buildSlotMachine() {
     fontWeight: "bold",
     fill: 0xffd700,
     stroke: 0x000000,
-    fontFamily: "Arial",
+    fontFamily: "Roboto Serif",
   }));
   resultText.anchor.set(0.5);
   resultText.x = 0;
@@ -806,7 +806,7 @@ function buildSlotMachine() {
     fontWeight: "bold",
     fill: 0xFDF1C0,
     stroke: 0x000000,
-    fontFamily: "Arial",
+    fontFamily: "Roboto Serif Bold",
   }));
   multiplierText.anchor.set(0.5);
   multiplierText.visible = false;
@@ -862,9 +862,9 @@ function buildSlotMachine() {
 
   // ── Buy Free Spins button (left of spin button) ────────────────────────────
   const BUY_BTN_W = 130;
-  const BUY_BTN_H = 80;
+  const BUY_BTN_H = 130;
   const buyBtnContainer = new Container();
-  buyBtnContainer.x = spinButton.x - SPIN_BTN_SIZE / 2 - BUY_BTN_W / 2 - 165;
+  buyBtnContainer.x = spinButton.x - SPIN_BTN_SIZE / 2 - BUY_BTN_W / 2 - 170;
   buyBtnContainer.y = spinButton.y;
   buyBtnContainer.zIndex = 100;
 
@@ -874,7 +874,7 @@ function buildSlotMachine() {
   buyBtnBg.endFill();
   buyBtnContainer.addChild(buyBtnBg);
 
-  const buyBtnLabelSprite = new Sprite(Texture.from("/BUY%20FREE%20SPINS_(1).png"));
+  const buyBtnLabelSprite = new Sprite(Texture.from("/buy_spin.png"));
   buyBtnLabelSprite.anchor.set(0.5);
   buyBtnLabelSprite.x = 0;
   buyBtnLabelSprite.y = 0;
@@ -1025,7 +1025,7 @@ function buildSlotMachine() {
   balanceContainer.addChild(balanceLabel);
 
   const creditsText = new Text("1,000.00", new TextStyle({
-    fontSize: 30, fontWeight: "bold", align: "center", fill: 0xFDF1C0, fontFamily: "Arial",
+    fontSize: 30, fontWeight: "bolder", align: "center", fill: 0xFDF1C0, fontFamily: "Roboto Serif",
   }));
   creditsText.anchor.set(0.5);
   creditsText.x = 0;
@@ -1045,7 +1045,7 @@ function buildSlotMachine() {
   totalWinContainer.addChild(totalWinLabel);
 
   const totalWinText = new Text("0.00", new TextStyle({
-    fontSize: 30, fontWeight: "bold", fill: 0xFDF1C0, fontFamily: "Arial",
+    fontSize: 30, fontWeight: "bolder", fill: 0xFDF1C0, fontFamily: "Roboto Serif",
   }));
   totalWinText.anchor.set(0.5);
   totalWinText.x = 0;
@@ -1091,7 +1091,7 @@ function buildSlotMachine() {
   betContainer.addChild(betText);
 
   const amountLabel = new Text("10.00", new TextStyle({
-    fontSize: 30, fontWeight: "bold", align: "center", fontFamily: "Arial", fill: 0xFDF1C0,
+    fontSize: 30, fontWeight: "bolder", align: "center", fontFamily: "Roboto Serif", fill: 0xFDF1C0,
   }));
   amountLabel.anchor.set(0.5);
   amountLabel.x = 0;
@@ -1164,18 +1164,18 @@ function buildSlotMachine() {
   const bgQuickBtnSprite = new Sprite(bgQuickBtn);
   bgQuickBtnSprite.anchor.set(0.5);
   bgQuickBtnSprite.x = 0;
-  bgQuickBtnSprite.y = ROW_GAP * 5 + 225;
+  bgQuickBtnSprite.y = ROW_GAP * 5 + 220;
   controlsContainer.addChild(bgQuickBtnSprite);
 
   const quickBetContainer = new Container();
   quickBetContainer.x = 0;
-  quickBetContainer.y = ROW_GAP * 5 + 225;
+  quickBetContainer.y = ROW_GAP * 5 + 220;
   controlsContainer.addChild(quickBetContainer);
 
   const quickBets = [10, 50, 100];
-  const QBTN_WIDTH = 65;
-  const QBTN_HEIGHT = 50;
-  const QBTN_GAP = 39;
+  const QBTN_WIDTH = 100;
+  const QBTN_HEIGHT = 44;
+  const QBTN_GAP = 9;
   const qTotalWidth = quickBets.length * QBTN_WIDTH + (quickBets.length - 1) * QBTN_GAP;
   const qStartX = -qTotalWidth / 2;
 
@@ -1185,7 +1185,7 @@ function buildSlotMachine() {
     btn.cursor = "pointer";
     btn.x = qStartX + idx * (QBTN_WIDTH + QBTN_GAP);
     btn.y = -QBTN_HEIGHT / 2;
-    const label = new Text(`${amount}`, { fontSize: 20, fontFamily: "Roboto Serif", fontWeight: "bold", fill: 0xFDF1C0 });
+    const label = new Text(`${amount}`, { fontSize: 20, fontFamily: "Roboto Serif", fontWeight: "bolder", fill: 0xFDF1C0 });
     label.anchor.set(0.5);
     label.x = QBTN_WIDTH / 2;
     label.y = QBTN_HEIGHT / 2;
