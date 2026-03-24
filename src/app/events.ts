@@ -19,7 +19,7 @@ export type GameEvent =
   | { type: "AutoSpinChanged"; active: boolean; remaining: number }
   | { type: "WinSequenceRequested"; winningPositions: WinningPosition[]; scatterPositions: WinningPosition[] }
   | { type: "ScatterBonusSequenceRequested"; scatterPositions: WinningPosition[]; freeSpinsAwarded: number; isRetrigger: boolean }
-  | { type: "CascadeRequested"; winningPositions: WinningPosition[] }
+  | { type: "CascadeRequested"; winningPositions: WinningPosition[]; nextGridPerReel?: number[][] }
   | { type: "ScatterCascadeRequested"; scatterPositions: WinningPosition[] }
   | { type: "RequestNextSpin"; afterMs: number; reason: "freeSpin" | "autoSpin" }
   | { type: "SpinFinished" }

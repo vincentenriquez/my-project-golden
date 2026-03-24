@@ -82,7 +82,8 @@ export class PixiReelsPort implements IReelsPort {
   cascade(
     config: { reelsCount: number; symbolsPerReel: number; symbolSize: number; rowPadding: number },
     winningPositions: WinningPosition[],
-    onComplete: () => void
+    onComplete: () => void,
+    nextGridPerReel?: number[][]
   ): void {
     const entries = this.toWinningEntries(winningPositions);
     this.cascadeController.cascadeSymbols(
@@ -92,7 +93,8 @@ export class PixiReelsPort implements IReelsPort {
       () => {
         // dim overlay handled by app/win animator; keep cascade UI-only
       },
-      onComplete
+      onComplete,
+      nextGridPerReel
     );
   }
 

@@ -4,6 +4,7 @@ import { SCATTER_SYMBOL_ID } from "../domain/symbolConfig";
 import { GamePhase } from "../domain/GamePhase";
 import type { IGameSession, ISpinEvaluator, ISpinResultGenerator, IScatterService } from "./ports";
 import type { GameEvent, GameEventListener, SpinKind } from "./events";
+import * as slotApi from "../infrastructure/api/slotApi";
 
 export interface GameControllerConfig {
   reelsCount: number;
@@ -91,13 +92,28 @@ export class GameController {
    */
   private lastAwardedScatterCount = 0;
 
+  private readonly useBackend: boolean;
+  private pendingBackendResult: slotApi.BackendPlayData | null = null;
+  private backendCascadeSteps: slotApi.BackendCascadeStep[] = [];
+  private backendStepIndex = 0;
+  private backendAccumulatedWin = 0;
+  /** Bonus total before the current backend free-spin round (HUD = this + per-spin cascade sum). */
+  private backendFreeSpinHudBase = 0;
+  /** True while processing a play_free response with cascades / win sequence. */
+  private activeBackendFreeSpinRound = false;
+  private backendPendingScatterAward: { add: number; positions: WinningPosition[]; isRetrigger: boolean } | null = null;
+  private backendBuyFreeTriggered = false;
+
   constructor(
     private readonly config: GameControllerConfig,
     private readonly session: IGameSession,
     private readonly spinEvaluator: ISpinEvaluator,
     private readonly spinResultGenerator: ISpinResultGenerator,
-    private readonly scatterService: IScatterService
-  ) { }
+    private readonly scatterService: IScatterService,
+    opts?: { useBackend?: boolean }
+  ) {
+    this.useBackend = opts?.useBackend === true;
+  }
 
   // ── Events ──────────────────────────────────────────────────────────────
   subscribe(listener: GameEventListener): () => void {
@@ -112,6 +128,8 @@ export class GameController {
   // ── Queries ─────────────────────────────────────────────────────────────
   getCredits(): number { return this.session.getCredits(); }
   getBet(): number { return this.session.getBet(); }
+  /** Total stake: bet_size × bet_level × base_multiplier (same as onepiece display bet). */
+  getTotalBetAmount(): number { return this.session.getTotalBetAmount(); }
   getRunning(): boolean { return this.running; }
   getPhase(): GamePhase { return this.phase; }
   getInFreeSpins(): boolean { return this.session.isInFreeSpins(); }
@@ -149,7 +167,53 @@ export class GameController {
   }
 
   getBuyFreeSpinsCost(): number {
-    return this.session.getBet() * this.config.buyFreeSpinsCostMultiplier;
+    return this.session.getTotalBetAmount() * this.config.buyFreeSpinsCostMultiplier;
+  }
+
+  /**
+   * Apply `/load` payload (balance, machine multiplier/levels, default bet). Emits HUD updates.
+   */
+  applyLoadData(data: slotApi.BackendLoadData): void {
+    const machine = data.machine;
+    const baseMult = data.info?.base_multiplier ?? machine?.multiplier;
+    const defaultLevel = machine?.default?.bet_level;
+    const cfg: { betLevel?: number; baseBetMultiplier?: number } = {};
+    if (typeof baseMult === "number" && baseMult > 0) {
+      cfg.baseBetMultiplier = baseMult;
+    }
+    if (typeof defaultLevel === "number" && defaultLevel >= 1) {
+      cfg.betLevel = defaultLevel;
+    }
+    if (Object.keys(cfg).length > 0) {
+      this.session.applyMachineBetConfig(cfg);
+    }
+
+    const defaultSize = machine?.default?.bet_size;
+    if (typeof defaultSize === "number") {
+      this.session.setBet(defaultSize);
+    }
+
+    if (typeof data.player?.balance === "number") {
+      const before = this.session.getCredits();
+      this.session.setCredits(data.player.balance);
+      this.emit({
+        type: "CreditsChanged",
+        from: before,
+        to: data.player.balance,
+        animate: false,
+      });
+    }
+
+    if (data.free_spin && typeof data.free_spin.count === "number") {
+      this.session.setFreeSpinsRemaining(data.free_spin.count);
+    }
+
+    this.emit({
+      type: "BetChanged",
+      from: this.session.getBet(),
+      to: this.session.getBet(),
+      animate: false,
+    });
   }
 
   // ── Use cases ───────────────────────────────────────────────────────────
@@ -178,6 +242,10 @@ export class GameController {
   }
 
   buyFreeSpins(): void {
+    if (this.useBackend) {
+      void this.buyFreeSpinsBackend();
+      return;
+    }
     if (this.running) {
       this.emit({ type: "BuyFreeSpinsBlocked", reason: "running" });
       return;
@@ -215,6 +283,10 @@ export class GameController {
   }
 
   requestSpin(source: SpinRequestSource): void {
+    if (this.useBackend) {
+      void this.startSpinBackend(source);
+      return;
+    }
     this.startSpinInternal(source);
   }
 
@@ -222,6 +294,125 @@ export class GameController {
   onSpinStopped(visibleMatrix: number[][]): void {
     this.running = false;
     this.emit({ type: "SpinStopped", visibleMatrix });
+
+    if (this.useBackend && this.pendingBackendResult) {
+      const data = this.pendingBackendResult;
+      this.pendingBackendResult = null;
+
+      // Trust backend for credits and free spins.
+      const creditsBefore = this.session.getCredits();
+      this.session.setCredits(data.balance);
+      const creditsAfter = this.session.getCredits();
+      if (creditsAfter !== creditsBefore) {
+        this.emit({ type: "CreditsChanged", from: creditsBefore, to: creditsAfter, animate: false });
+      }
+
+      const prevFree = this.session.getFreeSpinsRemaining();
+      const nextFree = data.free_spin?.count ?? 0;
+      this.session.setFreeSpinsRemaining(nextFree);
+      if (prevFree === 0 && nextFree > 0) {
+        this.emit({ type: "FreeSpinsChanged", remaining: nextFree, mode: "entered" });
+      } else if (prevFree > 0 && nextFree > 0) {
+        this.emit({ type: "FreeSpinsChanged", remaining: nextFree, mode: "updated" });
+      } else if (prevFree > 0 && nextFree === 0) {
+        // Ended after this result sequence
+        this.emit({ type: "FreeSpinsChanged", remaining: 0, mode: "ended" });
+      }
+
+      // Post-bonus panel uses bonusTotalPayout; local mode fills it in evaluateStep().
+      // Backend play_free returns cumulative session total_win (see GamePlayService::executePlayFree).
+      if (data.is_free_spin === true) {
+        this.backendFreeSpinHudBase = this.bonusTotalPayout;
+        this.activeBackendFreeSpinRound = true;
+        this.bonusTotalPayout = data.total_win;
+      } else {
+        this.activeBackendFreeSpinRound = false;
+      }
+
+      // Prepare cascade steps from backend.
+      const cascaded = data.slot.cascaded ?? [];
+      this.backendCascadeSteps = Array.isArray(cascaded) ? cascaded.filter((s) => (s?.cascades?.length ?? 0) > 0 && (s?.win ?? 0) > 0) : [];
+      this.backendStepIndex = 0;
+      this.backendAccumulatedWin = 0;
+
+      // Queue scatter bonus presentation (if backend awarded).
+      const add = data.free_spin?.add ?? 0;
+      if (add && add > 0) {
+        const isRetrigger = prevFree > 0;
+        const scatterPositions: WinningPosition[] = [];
+        for (let rowIndex = 0; rowIndex < visibleMatrix.length; rowIndex++) {
+          for (let reelIndex = 0; reelIndex < visibleMatrix[rowIndex].length; reelIndex++) {
+            if (visibleMatrix[rowIndex][reelIndex] === SCATTER_SYMBOL_ID) {
+              scatterPositions.push({ reelIndex, rowIndex });
+            }
+          }
+        }
+        this.backendPendingScatterAward = { add, positions: scatterPositions, isRetrigger };
+      } else if (this.backendBuyFreeTriggered && prevFree === 0 && nextFree > 0) {
+        // buy-free-game returns the full `count` and does not set `add`.
+        const scatterPositions: WinningPosition[] = [];
+        for (let rowIndex = 0; rowIndex < visibleMatrix.length; rowIndex++) {
+          for (let reelIndex = 0; reelIndex < visibleMatrix[rowIndex].length; reelIndex++) {
+            if (visibleMatrix[rowIndex][reelIndex] === SCATTER_SYMBOL_ID) {
+              scatterPositions.push({ reelIndex, rowIndex });
+            }
+          }
+        }
+        this.backendPendingScatterAward = { add: nextFree, positions: scatterPositions, isRetrigger: false };
+        this.backendBuyFreeTriggered = false;
+      } else {
+        this.backendPendingScatterAward = null;
+        this.backendBuyFreeTriggered = false;
+      }
+
+      // Start backend-driven win/cascade sequence.
+      if (this.backendCascadeSteps.length > 0) {
+        this.startBackendStep();
+        return;
+      }
+
+      // Fallback: if backend returned winnings with explicit positions but no cascades, still show a win sequence.
+      const positions: WinningPosition[] = [];
+      const winnings = data.slot.winnings ?? [];
+      for (const w of winnings) {
+        const pos = w.positions ?? [];
+        for (const p of pos) positions.push({ reelIndex: p.col, rowIndex: p.row });
+      }
+      if (positions.length > 0 && data.total_win > 0) {
+        if (data.is_free_spin === true) {
+          this.backendAccumulatedWin = data.win ?? 0;
+          this.emit({ type: "TotalWinChanged", totalSoFar: data.total_win, animate: true });
+          this.emit({
+            type: "WinAmountAwarded",
+            hitAmount: data.win ?? data.total_win,
+            totalSoFar: data.total_win,
+            bonusText: "",
+          });
+        } else {
+          this.backendAccumulatedWin = data.total_win;
+          this.emit({ type: "TotalWinChanged", totalSoFar: this.backendAccumulatedWin, animate: true });
+          this.emit({
+            type: "WinAmountAwarded",
+            hitAmount: data.total_win,
+            totalSoFar: this.backendAccumulatedWin,
+            bonusText: "",
+          });
+        }
+        this.lastWinningPositions = positions;
+        this.winLock = true;
+        this.winSequenceComplete = false;
+        this.winDisplayComplete = false;
+        this.emit({ type: "WinSequenceRequested", winningPositions: positions, scatterPositions: [] });
+        return;
+      }
+
+      if (data.is_free_spin === true) {
+        this.emit({ type: "TotalWinChanged", totalSoFar: this.bonusTotalPayout, animate: false });
+      }
+
+      this.resolveContinuation();
+      return;
+    }
 
     if (this.buyPreludeScatterActive) {
       this.buyPreludeScatterActive = false;
@@ -256,8 +447,24 @@ export class GameController {
       this.resolveContinuation();
       return;
     }
-    // A cascade only starts AFTER the win highlight sequence has finished.
-    // Increase the multiplier now so the next evaluation (post-cascade) uses it.
+
+    if (this.useBackend) {
+      const step = this.backendCascadeSteps[this.backendStepIndex];
+      if (step) {
+        const nextGrid = slotApi.backendReelToGrid(step.rng);
+        this.emit({
+          type: "CascadeRequested",
+          winningPositions: this.lastWinningPositions,
+          nextGridPerReel: nextGrid,
+        });
+        return;
+      }
+      this.emitBackendFreeSpinTotalWinSnapIfNeeded();
+      this.resolveContinuation();
+      return;
+    }
+
+    // Local-mode cascade.
     this.cascadeMultiplier += 1;
     this.emit({ type: "CascadeRequested", winningPositions: this.lastWinningPositions });
   }
@@ -290,7 +497,26 @@ export class GameController {
   }
 
   onCascadeFinished(visibleMatrix: number[][]): void {
+    if (this.useBackend) {
+      // After a backend-authoritative cascade drop, continue to next backend step (if any).
+      this.backendStepIndex += 1;
+      if (this.backendStepIndex < this.backendCascadeSteps.length) {
+        this.startBackendStep();
+      } else {
+        this.lastWinningPositions = [];
+        this.emitBackendFreeSpinTotalWinSnapIfNeeded();
+        this.resolveContinuation();
+      }
+      return;
+    }
+
     this.evaluateStep(visibleMatrix);
+  }
+
+  /** Align HUD with API cumulative total after free-spin cascade steps (fixes step-sum vs total_win drift). */
+  private emitBackendFreeSpinTotalWinSnapIfNeeded(): void {
+    if (!this.activeBackendFreeSpinRound) return;
+    this.emit({ type: "TotalWinChanged", totalSoFar: this.bonusTotalPayout, animate: false });
   }
 
   onWinDisplayFinished(): void {
@@ -352,7 +578,7 @@ export class GameController {
 
     const isFreeSpin = this.session.isInFreeSpins();
     const kind: SpinKind = isFreeSpin ? "free" : "paid";
-    const bet = this.session.getBet();
+    const bet = this.session.getTotalBetAmount();
 
     const creditsBefore = this.session.getCredits();
 
@@ -398,6 +624,165 @@ export class GameController {
     this.emit({ type: "SpinToResultRequested", resultPerReel });
   }
 
+  private async startSpinBackend(source: SpinRequestSource): Promise<void> {
+    if (this.isInPostBonusPhase()) {
+      this.emit({ type: "SpinBlocked", reason: "postBonus" });
+      return;
+    }
+    if (this.running) {
+      this.emit({ type: "SpinBlocked", reason: "running" });
+      return;
+    }
+    if (this.winLock && source === "manual") {
+      this.emit({ type: "SpinBlocked", reason: "winLock" });
+      return;
+    }
+    if (source === "manual" && this.session.isAutoSpinActive()) {
+      this.emit({ type: "SpinBlocked", reason: "autoSpinActive" });
+      return;
+    }
+
+    const isFreeSpin = this.session.isInFreeSpins();
+    const kind: SpinKind = isFreeSpin ? "free" : "paid";
+    const betSize = this.session.getBet();
+    const betLevel = this.session.getBetLevel();
+
+    if (!isFreeSpin && !this.session.hasEnoughCreditsForBet()) {
+      this.emit({ type: "SpinBlocked", reason: "insufficientCredits" });
+      return;
+    }
+
+    // Reset per-spin bookkeeping (mirror local reset).
+    this.currentSpinTotalPayout = 0;
+    this.cascadeMultiplier = 1;
+    this.pendingFreeSpinsFromScatter = 0;
+    this.pendingScatterPositions = [];
+    this.postScatterCascadePositions = [];
+    this.scatterOnlyTrigger = false;
+    this.lastAwardedScatterCount = 0;
+    if (!isFreeSpin) {
+      this.bonusTotalPayout = 0;
+      this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+    }
+
+    this.running = true;
+    this.winSequenceComplete = false;
+    this.lastWinningPositions = [];
+    this.lastStartedSpinKind = kind;
+
+    const creditsBefore = this.session.getCredits();
+    const creditsAfter = creditsBefore;
+    this.emit({
+      type: "SpinStarted",
+      kind,
+      bet: this.session.getTotalBetAmount(),
+      creditsBefore,
+      creditsAfter,
+    });
+
+    try {
+      const data = isFreeSpin ? await slotApi.playFreeGame() : await slotApi.play(betSize, betLevel);
+      this.pendingBackendResult = data;
+      const grid = slotApi.backendReelToGrid(data.slot.reel);
+      this.emit({ type: "SpinToResultRequested", resultPerReel: grid });
+    } catch (e) {
+      this.running = false;
+      this.emit({ type: "ResultTextChanged", text: (e as Error)?.message || "Spin failed" });
+      this.emit({ type: "SpinFinished" });
+      this.tryReleaseWinLock();
+    }
+  }
+
+  private startBackendStep(): void {
+    const step = this.backendCascadeSteps[this.backendStepIndex];
+    if (!step) {
+      this.resolveContinuation();
+      return;
+    }
+
+    const positions: WinningPosition[] = [];
+    for (const c of step.cascades ?? []) {
+      positions.push({ reelIndex: c.column, rowIndex: c.row });
+    }
+
+    this.lastWinningPositions = positions;
+
+    this.winLock = true;
+    this.winSequenceComplete = false;
+    this.winDisplayComplete = false;
+
+    this.backendAccumulatedWin += step.win ?? 0;
+    const totalWinHud = this.activeBackendFreeSpinRound
+      ? this.backendFreeSpinHudBase + this.backendAccumulatedWin
+      : this.backendAccumulatedWin;
+    this.emit({ type: "TotalWinChanged", totalSoFar: totalWinHud, animate: true });
+    this.emit({
+      type: "WinAmountAwarded",
+      hitAmount: step.win ?? 0,
+      totalSoFar: totalWinHud,
+      bonusText: "",
+    });
+
+    this.emit({
+      type: "WinSequenceRequested",
+      winningPositions: positions,
+      scatterPositions: [],
+    });
+  }
+
+  private async buyFreeSpinsBackend(): Promise<void> {
+    if (this.running) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "running" });
+      return;
+    }
+    if (this.winLock) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "winLock" });
+      return;
+    }
+    if (this.session.isInFreeSpins()) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "inFreeSpins" });
+      return;
+    }
+    if (this.session.isAutoSpinActive()) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "autoSpinActive" });
+      return;
+    }
+    if (this.isInPostBonusPhase()) {
+      this.emit({ type: "BuyFreeSpinsBlocked", reason: "running" });
+      return;
+    }
+
+    this.running = true;
+    this.winSequenceComplete = false;
+    this.lastWinningPositions = [];
+    this.lastStartedSpinKind = "paid";
+
+    const betSize = this.session.getBet();
+    const creditsBefore = this.session.getCredits();
+    const creditsAfter = creditsBefore;
+    this.emit({
+      type: "SpinStarted",
+      kind: "paid",
+      bet: this.session.getTotalBetAmount(),
+      creditsBefore,
+      creditsAfter,
+    });
+
+    try {
+      this.backendBuyFreeTriggered = true;
+      const data = await slotApi.buyFreeGame(betSize, this.session.getBetLevel());
+      this.pendingBackendResult = data;
+      const grid = slotApi.backendReelToGrid(data.slot.reel);
+      this.emit({ type: "SpinToResultRequested", resultPerReel: grid });
+    } catch (e) {
+      this.backendBuyFreeTriggered = false;
+      this.running = false;
+      this.emit({ type: "ResultTextChanged", text: (e as Error)?.message || "Buy free spins failed" });
+      this.emit({ type: "SpinFinished" });
+      this.tryReleaseWinLock();
+    }
+  }
+
   /**
    * Starts a bet-free visual prelude spin for `buyFreeSpins()`:
    * - lands with exactly 3 scatters (reels 0..2, rowIndex 0)
@@ -416,7 +801,7 @@ export class GameController {
 
     const isFreeSpin = this.session.isInFreeSpins();
     const kind: SpinKind = isFreeSpin ? "free" : "paid";
-    const bet = this.session.getBet();
+    const bet = this.session.getTotalBetAmount();
 
     const creditsBefore = this.session.getCredits();
     const creditsAfter = creditsBefore; // visual-only prelude spin
@@ -467,7 +852,11 @@ export class GameController {
       reelsCount: this.config.reelsCount,
       symbolsPerReel: this.config.symbolsPerReel,
     };
-    const outcome: SpinOutcome = this.spinEvaluator.evaluate(spinConfig, visibleMatrix, this.session.getBet());
+    const outcome: SpinOutcome = this.spinEvaluator.evaluate(
+      spinConfig,
+      visibleMatrix,
+      this.session.getTotalBetAmount(),
+    );
     this.emit({ type: "OutcomeEvaluated", outcome });
 
     // ── 1. Collect scatter award (centralized logic) ────────────────────────
@@ -545,6 +934,35 @@ export class GameController {
   private resolveContinuation(): void {
     this.winSequenceComplete = true;
 
+    if (this.useBackend && this.backendPendingScatterAward) {
+      const { add, positions, isRetrigger } = this.backendPendingScatterAward;
+      this.backendPendingScatterAward = null;
+
+      // Backend already updated the free-spin count in session; keep state but mirror the presentation behavior.
+      if (!isRetrigger) {
+        this.setPhase(GamePhase.ScatterIntro);
+        this.bonusTotalPayout = 0;
+        this.emit({ type: "TotalWinChanged", totalSoFar: 0, animate: false });
+        this.emit({ type: "FreeSpinsChanged", remaining: this.session.getFreeSpinsRemaining(), mode: "entered" });
+      } else {
+        this.emit({ type: "FreeSpinsChanged", remaining: this.session.getFreeSpinsRemaining(), mode: "updated" });
+      }
+
+      if (positions.length > 0) {
+        if (isRetrigger) {
+          this.postScatterCascadePositions = positions;
+        }
+        this.scatterSequenceActive = true;
+        this.emit({
+          type: "ScatterBonusSequenceRequested",
+          scatterPositions: positions,
+          freeSpinsAwarded: add,
+          isRetrigger,
+        });
+        return;
+      }
+    }
+
     // If scatter bonus was queued, fire it now — board is fully settled.
     if (this.pendingFreeSpinsFromScatter > 0) {
       const queued = this.pendingFreeSpinsFromScatter;
@@ -581,30 +999,47 @@ export class GameController {
       // No positions to animate — fall through to normal continuation.
     }
 
-    if (this.session.isInFreeSpins()) {
-      // IMPORTANT: only consume a free spin after a FREE spin actually ran.
-      // When we first enter free spins, resolveContinuation() is called before any free spin starts.
-      if (this.lastStartedSpinKind === "free") {
+    // Free-spin continuation after a spin that has fully resolved (wins/cascades/scatter done).
+    //
+    // Backend mode: `onSpinStopped` already applied `data.free_spin.count` (remaining after this
+    // round). Do NOT call `consumeFreeSpin()` — that would double-decrement vs the server.
+    //
+    // Local mode: remaining count is only tracked here via `consumeFreeSpin()`.
+    if (this.lastStartedSpinKind === "free") {
+      if (this.useBackend) {
+        const remaining = this.session.getFreeSpinsRemaining();
+        if (remaining > 0) {
+          this.emit({ type: "FreeSpinsChanged", remaining, mode: "updated" });
+          this.emit({ type: "RequestNextSpin", afterMs: 1200, reason: "freeSpin" });
+        } else {
+          this.setPhase(GamePhase.PostBonusSummary);
+          this.emit({
+            type: "BonusCompleted",
+            totalWin: this.bonusTotalPayout,
+            bet: this.session.getTotalBetAmount(),
+          });
+        }
+      } else if (this.session.isInFreeSpins()) {
         const remaining = this.session.consumeFreeSpin();
         if (remaining > 0) {
           this.emit({ type: "FreeSpinsChanged", remaining, mode: "updated" });
           this.emit({ type: "RequestNextSpin", afterMs: 1200, reason: "freeSpin" });
         } else {
-          // Free spins exhausted — enter PostBonusSummary phase.
-          // BonusResultPanel is shown; user dismiss → onBonusResultDismissed → PostBonusTransition.
           this.setPhase(GamePhase.PostBonusSummary);
           this.emit({
             type: "BonusCompleted",
             totalWin: this.bonusTotalPayout,
-            bet: this.session.getBet(),
+            bet: this.session.getTotalBetAmount(),
           });
         }
-      } else {
-        // Entered/retriggered free spins: kick off the first free spin.
-        this.setPhase(GamePhase.FreeSpins);
-        this.emit({ type: "RequestNextSpin", afterMs: 0, reason: "freeSpin" });
       }
+      return;
+    }
 
+    if (this.session.isInFreeSpins()) {
+      // Entered/retriggered free spins: kick off the first free spin (no consumption yet).
+      this.setPhase(GamePhase.FreeSpins);
+      this.emit({ type: "RequestNextSpin", afterMs: 0, reason: "freeSpin" });
       return;
     }
 

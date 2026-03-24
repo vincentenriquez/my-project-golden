@@ -14,6 +14,10 @@ export class GameSession {
   private readonly minBet: number;
   private readonly maxBet: number;
 
+  /** Mirrors backend + onepiece: total stake = bet_size × bet_level × base_multiplier. */
+  private betLevel = 1;
+  private baseBetMultiplier = 1;
+
   private freeSpinsRemaining = 0;
   private inFreeSpins = false;
 
@@ -33,8 +37,41 @@ export class GameSession {
     return this.credits;
   }
 
+  setCredits(amount: number): void {
+    this.credits = Number.isFinite(amount) ? amount : this.credits;
+  }
+
   getBet(): number {
     return this.bet;
+  }
+
+  getBetLevel(): number {
+    return this.betLevel;
+  }
+
+  getBaseBetMultiplier(): number {
+    return this.baseBetMultiplier;
+  }
+
+  /**
+   * Total monetary stake for one paid spin (what to show as "Bet" and deduct from credits).
+   * Same formula as onepiece `GameState.currentBetAmount`.
+   */
+  getTotalBetAmount(): number {
+    const size = this.bet;
+    const level = Math.max(1, this.betLevel);
+    const mult = Math.max(0, this.baseBetMultiplier);
+    const product = size * level * mult;
+    return product || size * level;
+  }
+
+  applyMachineBetConfig(config: { betLevel?: number; baseBetMultiplier?: number }): void {
+    if (typeof config.betLevel === "number" && config.betLevel >= 1) {
+      this.betLevel = Math.floor(config.betLevel);
+    }
+    if (typeof config.baseBetMultiplier === "number" && config.baseBetMultiplier > 0) {
+      this.baseBetMultiplier = config.baseBetMultiplier;
+    }
   }
 
   setBet(amount: number): void {
@@ -50,11 +87,11 @@ export class GameSession {
    */
   deductBetForSpin(): void {
     //if (this.inFreeSpins) return;
-    this.credits -= this.bet;
+    this.credits -= this.getTotalBetAmount();
   }
 
   hasEnoughCreditsForBet(): boolean {
-    return this.credits >= this.bet;
+    return this.credits >= this.getTotalBetAmount();
   }
 
   // ── Free Spins ────────────────────────────────────────────────────────────
@@ -65,6 +102,12 @@ export class GameSession {
 
   getFreeSpinsRemaining(): number {
     return this.freeSpinsRemaining;
+  }
+
+  setFreeSpinsRemaining(count: number): void {
+    const next = Math.max(0, Math.floor(Number.isFinite(count) ? count : 0));
+    this.freeSpinsRemaining = next;
+    this.inFreeSpins = next > 0;
   }
 
   /**

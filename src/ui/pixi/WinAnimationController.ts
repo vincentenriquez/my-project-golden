@@ -62,7 +62,8 @@ export class WinAnimationController {
     config: CascadeConfig,
     winningEntries: WinningCellEntry[],
     setDimOverlayVisible: (visible: boolean) => void,
-    onCascadeFinished: () => void
+    onCascadeFinished: () => void,
+    nextGridPerReel?: number[][]
   ): void {
     const { reelsCount, symbolsPerReel, symbolSize, rowPadding } = config;
 
@@ -107,14 +108,22 @@ export class WinAnimationController {
       }
 
       const numEmpty = empty.size;
-      const newSyms: number[] = [];
-      const pick = this.wildAllowedReelIndices.has(ri)
-        ? this.symbolPicker
-        : this.symbolPickerExcludingWild;
 
-      for (let i = 0; i < numEmpty; i++) newSyms.push(pick());
-
-      const newColumn = [...newSyms, ...survivors.map((s) => s.sym)];
+      // If backend provided an authoritative "after" grid, prefer it.
+      // The UI will still animate using our local drop heuristic, but the final
+      // symbol IDs will exactly match backend state.
+      let newColumn: number[];
+      const backendColumn = nextGridPerReel?.[ri];
+      if (Array.isArray(backendColumn) && backendColumn.length >= symbolsPerReel) {
+        newColumn = backendColumn.slice(0, symbolsPerReel);
+      } else {
+        const newSyms: number[] = [];
+        const pick = this.wildAllowedReelIndices.has(ri)
+          ? this.symbolPicker
+          : this.symbolPickerExcludingWild;
+        for (let i = 0; i < numEmpty; i++) newSyms.push(pick());
+        newColumn = [...newSyms, ...survivors.map((s) => s.sym)];
+      }
 
       const len = reel.strip.length;
       const top = Math.floor(reel.position) % len;

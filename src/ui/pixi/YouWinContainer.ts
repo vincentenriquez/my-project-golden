@@ -1,13 +1,10 @@
 import { Container, Graphics, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { WinCountUp } from "../shared/WinCountUp";
+import { formatPesoAmount } from "../shared/currency";
 
 const SHOW_DURATION_MS = 1300;
 
-function formatAmount(value: number): string {
-  const [intPart, decPart] = value.toFixed(2).split(".");
-  const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${withSep}.${decPart}`;
-}
+const formatAmount = formatPesoAmount;
 
 export class YouWinContainer {
   private readonly container: Container;

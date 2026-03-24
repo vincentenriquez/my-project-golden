@@ -16,7 +16,7 @@ export class BonusResultPanel {
   private onDismissRef: (() => void) | null = null;
   private dismissing = false;
 
-  private readonly AUTO_CLOSE_MS = 5000;
+  private readonly AUTO_CLOSE_MS = 0;
 
   constructor(app: Application, layer: Container) {
     this.app = app;

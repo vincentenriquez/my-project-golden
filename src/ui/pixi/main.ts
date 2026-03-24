@@ -34,11 +34,13 @@ import {
 import { FireflyEffect } from "./FireflyEffect";
 import { FireFrameEffect } from "./FireFrameEffect";
 import { WinCountUp } from "../shared/WinCountUp";
+import { formatPesoAmount } from "../shared/currency";
 import { SlotInfoContainer } from "./SlotInfoContainer";
 import { GreetingsScatterPanel } from "./GreetingsScatterPanel";
 import { BonusResultPanel } from "./BonusResultPanel";
 import { PostBonusTransitionController } from "./PostBonusTransitionController";
 import { gsap } from "gsap";
+import * as slotApi from "../../infrastructure/api/slotApi";
 
 // ---------- Layout constants ----------
 const REEL_WIDTH = 160;
@@ -283,17 +285,88 @@ function createGameControllerInstance(
     tweenTo,
     (visible) => dimOverlayView.setVisible(visible)
   );
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token");
+  if (token) {
+    slotApi.setAuthToken(token);
+  }
+  slotApi.setSlotApiBaseUrl("http://blitzgamingbackoffice.test/api/v1");
+
   const controller = new GameController(
     controllerConfig,
     session,
     spinEvaluator,
     spinResultGenerator,
-    scatterService
+    scatterService,
+    { useBackend: Boolean(token) }
   );
 
   // HUD views/adapters (UI-owned)
   const creditsView = new PixiTextView(uiDeps.creditsText);
   const resultView = new PixiTextView(uiDeps.resultText);
+  /** Match WinAnimationController.CASCADE_DROP_DURATION_MS — fade with reel drops. */
+  const WIN_POPUP_FADE_OUT_MS = 400;
+  /** Brief hold after count-up / breakdown before fade when no cascade follows. */
+  const WIN_POPUP_POST_WIN_HOLD_MS = 2000;
+
+  let postWinFadeTimer: number | null = null;
+  const clearPostWinFadeTimer = () => {
+    if (postWinFadeTimer !== null) {
+      window.clearTimeout(postWinFadeTimer);
+      postWinFadeTimer = null;
+    }
+  };
+
+  function cancelWinPopupVisualTweens(): void {
+    const mt = uiDeps.multiplierText;
+    const rt = uiDeps.resultText;
+    for (let i = tweening.length - 1; i >= 0; i--) {
+      const o = tweening[i].object;
+      if (o === resultView || o === rt || o === rt.scale || o === mt) {
+        tweening.splice(i, 1);
+      }
+    }
+  }
+
+  function resetWinPopupVisual(): void {
+    resultView.setText("");
+    resultView.visible = false;
+    resultView.alpha = 1;
+    resultView.scale = { x: 1, y: 1 };
+    uiDeps.multiplierText.visible = false;
+    uiDeps.multiplierText.text = "";
+    uiDeps.multiplierText.alpha = 1;
+  }
+
+  /** Fade win amount + multiplier in sync with reel cascade timing. */
+  function fadeOutWinPopupSyncedWithCascade(): void {
+    clearPostWinFadeTimer();
+    cancelWinPopupVisualTweens();
+    const rt = uiDeps.resultText;
+    const mt = uiDeps.multiplierText;
+    const hadAmount = rt.visible && rt.text.trim().length > 0;
+    const hadMult = mt.visible;
+    if (!hadAmount && !hadMult) {
+      resetWinPopupVisual();
+      return;
+    }
+    const linear = (t: number) => t;
+    tweenTo(resultView, "alpha", 0, WIN_POPUP_FADE_OUT_MS, linear, undefined, () => {
+      resetWinPopupVisual();
+    });
+    if (hadMult) {
+      tweenTo(mt, "alpha", 0, WIN_POPUP_FADE_OUT_MS, linear);
+    }
+  }
+
+  function schedulePostWinFadeOut(): void {
+    clearPostWinFadeTimer();
+    postWinFadeTimer = window.setTimeout(() => {
+      postWinFadeTimer = null;
+      fadeOutWinPopupSyncedWithCascade();
+    }, WIN_POPUP_POST_WIN_HOLD_MS);
+  }
+
   const betView = new PixiTextView(uiDeps.amountLabel);
   const slotInfoView = new PixiSlotInfoView(uiDeps.slotInfo);
   const totalWinView = new PixiTextView(uiDeps.totalWinText);
@@ -303,17 +376,13 @@ function createGameControllerInstance(
   );
 
   // Formatting helper (UI-owned)
-  const formatAmount = (value: number): string => {
-    const [intPart, decPart] = value.toFixed(2).split(".");
-    const withSeparators = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-    return `${withSeparators}.${decPart}`;
-  };
+  const formatAmount = formatPesoAmount;
 
   // HUD animators (UI-owned)
   let pendingBonusText = "";
   let balanceAtWinStart = controller.getCredits();
   let totalWinDisplayValue = 0;
-  let betDisplayValue = controller.getBet();
+  let betDisplayValue = controller.getTotalBetAmount();
   let cascadeStepCount = 0;
   let winSequenceTimers: number[] = [];
   let winDisplayMode: "normal" | "cascadeBase" = "normal";
@@ -340,6 +409,7 @@ function createGameControllerInstance(
             const t3 = window.setTimeout(() => {
               winDisplayMode = "normal";
               controller.onWinDisplayFinished();
+              schedulePostWinFadeOut();
             }, 400);
             winSequenceTimers.push(t3);
           }, 400);
@@ -351,7 +421,12 @@ function createGameControllerInstance(
     }
 
     resultView.setText(`${formatAmount(displayValue)}${pendingBonusText}`);
-    if (isDone) controller.onWinDisplayFinished();
+    if (isDone) {
+      controller.onWinDisplayFinished();
+      if (winDisplayMode === "normal") {
+        schedulePostWinFadeOut();
+      }
+    }
   });
   const balanceCountUp = new WinCountUp((displayValue) => {
     creditsView.setText(formatAmount(balanceAtWinStart + displayValue));
@@ -380,6 +455,9 @@ function createGameControllerInstance(
       case "SpinStarted": {
         cascadeStepCount = 0;
         clearWinSequenceTimers();
+        clearPostWinFadeTimer();
+        cancelWinPopupVisualTweens();
+        resetWinPopupVisual();
         winDisplayMode = "normal";
         uiDeps.multiplierText.visible = false;
         uiDeps.multiplierText.text = "";
@@ -401,7 +479,13 @@ function createGameControllerInstance(
         break;
       }
       case "BetChanged": {
-        betCountUp.start(betDisplayValue, event.to);
+        const target = controller.getTotalBetAmount();
+        if (event.animate) {
+          betCountUp.start(betDisplayValue, target);
+        } else {
+          betDisplayValue = target;
+          betView.setText(formatAmount(target));
+        }
         break;
       }
       case "TotalWinChanged": {
@@ -416,6 +500,7 @@ function createGameControllerInstance(
       case "ResultTextChanged": {
         pendingBonusText = "";
         clearWinSequenceTimers();
+        clearPostWinFadeTimer();
         winDisplayMode = "normal";
         winCountUp.cancel();
         resultView.setText(event.text);
@@ -424,6 +509,8 @@ function createGameControllerInstance(
       case "WinAmountAwarded": {
         pendingBonusText = event.bonusText;
         clearWinSequenceTimers();
+        clearPostWinFadeTimer();
+        cancelWinPopupVisualTweens();
         resultView.alpha = 0;
         resultView.scale = { x: 0.65, y: 0.65 };
         resultView.visible = true;
@@ -544,11 +631,13 @@ function createGameControllerInstance(
         break;
       }
       case "CascadeRequested": {
+        fadeOutWinPopupSyncedWithCascade();
         cascadeStepCount += 1;
         // Only after the first cascade happens: first cascade shows x2.
         // Set the text now, but reveal it later only if the cascade produces a win.
         uiDeps.multiplierText.text = `x${cascadeStepCount + 1}`;
         uiDeps.multiplierText.visible = false;
+        uiDeps.multiplierText.alpha = 1;
         reelsPort.cascade(
           {
             reelsCount: controllerConfig.reelsCount,
@@ -560,7 +649,8 @@ function createGameControllerInstance(
           () => {
             const matrix = reelsPort.getVisibleMatrix(controllerConfig.symbolsPerReel);
             controller.onCascadeFinished(matrix);
-          }
+          },
+          event.nextGridPerReel
         );
         break;
       }
@@ -572,10 +662,15 @@ function createGameControllerInstance(
       }
       case "SpinFinished": {
         winAnimator.clear();
+        clearPostWinFadeTimer();
         uiDeps.multiplierText.visible = false;
+        if (uiDeps.resultText.visible && uiDeps.resultText.text.trim().length > 0) {
+          fadeOutWinPopupSyncedWithCascade();
+        }
         break;
       }
       case "ScatterCascadeRequested": {
+        fadeOutWinPopupSyncedWithCascade();
         reelsPort.cascade(
           {
             reelsCount: controllerConfig.reelsCount,
@@ -596,7 +691,7 @@ function createGameControllerInstance(
 
   // Initial HUD render
   creditsView.setText(formatAmount(controller.getCredits()));
-  betView.setText(formatAmount(controller.getBet()));
+  betView.setText(formatAmount(controller.getTotalBetAmount()));
   totalWinView.setText("0.00");
   dimOverlayView.setVisible(false);
   resultView.setText("");
@@ -648,6 +743,11 @@ function onAssetsLoaded() {
   buildSlotMachine();
 }
 onAssetsLoaded();
+
+// Backend session close on page leave (onepiece-standard).
+window.addEventListener("pagehide", () => {
+  slotApi.endSessionOnClose();
+});
 
 // ---------- Build Slot Machine ----------
 function buildSlotMachine() {
@@ -1286,6 +1386,18 @@ function buildSlotMachine() {
     highlightLayer,
     winFloatLayer
   );
+
+  const loadParams = new URLSearchParams(window.location.search);
+  if (loadParams.get("token")) {
+    void slotApi
+      .load()
+      .then((data) => {
+        gameController.applyLoadData(data);
+      })
+      .catch((err) => {
+        console.error("slot load failed", err);
+      });
+  }
 
   // Tell win animator where the reel grid top-edge is.
   winAnimator.setReelBounds(mask.y, mask.x);

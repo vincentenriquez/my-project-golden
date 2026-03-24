@@ -1,6 +1,7 @@
 import { Container, Graphics, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { determineWinTier, type WinTier } from "../../domain/WinTierService";
 import { WinCountUp } from "../shared/WinCountUp";
+import { formatPesoAmount } from "../shared/currency";
 
 const STEP_SHOW_DURATION_MS = 1000;
 
@@ -10,11 +11,7 @@ const TIER_ASSETS: Partial<Record<WinTier, string>> = {
   epicWin: "/epic_win.png",
 };
 
-function formatAmount(value: number): string {
-  const [intPart, decPart] = value.toFixed(2).split(".");
-  const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${withSep}.${decPart}`;
-}
+const formatAmount = formatPesoAmount;
 
 function buildTierSequence(highest: WinTier): WinTier[] {
   if (highest === "epicWin") return ["bigWin", "megaWin", "epicWin"];
@@ -114,7 +111,7 @@ export class WinTierSequenceContainer {
 
     // Small settle delay so the player can read the final number
     // even when no tier sequence applies.
-    await this.wait(400, token);
+    await this.wait(3000, token);
     if (token !== this.cancelToken) return;
 
     this.container.visible = false;

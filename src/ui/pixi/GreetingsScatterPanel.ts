@@ -88,8 +88,7 @@ export class GreetingsScatterPanel {
         fontSize: 80,
         fontWeight: "bold",
         fill: 0xffd700,
-        stroke: 0x000000,
-        strokeThickness: 6,
+        stroke: { color: 0x000000, width: 6 },
         fontFamily: "Arial",
       }));
       this.freeSpinsCountText.anchor.set(0.5);

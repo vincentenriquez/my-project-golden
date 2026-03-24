@@ -9,8 +9,14 @@ import type { GenerateSpinResultOptions } from "../domain/SpinResultGenerator";
 export interface IGameSession {
   getCredits(): number;
   getBet(): number;
+  getBetLevel(): number;
+  /** Total stake (bet_size × bet_level × base_multiplier) for display and local deductions. */
+  getTotalBetAmount(): number;
   setBet(amount: number): void;
+  applyMachineBetConfig(config: { betLevel?: number; baseBetMultiplier?: number }): void;
   addCredits(amount: number): void;
+  /** Backend-authoritative credit sync (used by backend integration). */
+  setCredits(amount: number): void;
   deductBetForSpin(): void;
   hasEnoughCreditsForBet(): boolean;
   isInFreeSpins(): boolean;
@@ -18,6 +24,8 @@ export interface IGameSession {
   awardFreeSpins(count: number): void;
   consumeFreeSpin(): number;
   endFreeSpinSeries(): void;
+  /** Backend-authoritative free-spin sync (used by backend integration). */
+  setFreeSpinsRemaining(count: number): void;
   isAutoSpinActive(): boolean;
   getAutoSpinsRemaining(): number;
   startAutoSpin(count: number): void;
