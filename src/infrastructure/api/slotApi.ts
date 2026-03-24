@@ -110,7 +110,7 @@ export function symbolNameToIndex(name: string): number {
   return SYMBOL_NAME_TO_INDEX[n] ?? 0;
 }
 
-let apiBaseUrl = "http://blitzgamingbackoffice.test/api/v1";
+let apiBaseUrl = "http://192.168.150.139:8000/api/v1";
 let authToken: string | null = null;
 let currentSessionId: string | null = null;
 let roundCounter = 0;
